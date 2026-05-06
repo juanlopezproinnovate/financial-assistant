@@ -22,7 +22,7 @@ class Settings:
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
     # Base de datos
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:[YOUR-PASSWORD]@db.edxtetiaubdbjptnoxxz.supabase.co:5432/postgres")
 
     # General
     TZ: str = os.getenv("TZ", "America/Lima")
