@@ -1,7 +1,8 @@
 """
 app/services/onboarding_service.py
-Flujo de onboarding para nuevos comerciantes — 4 pasos
-Usa el pool de database.py existente.
+Adaptado al schema real del Día 1:
+- negocios: whatsapp_numero, nombre_negocio, estado, onboarding_completo
+- sesiones: negocio_id (FK), estado_conversacion, datos_temporales
 """
 
 import json
@@ -14,67 +15,104 @@ logger = logging.getLogger(__name__)
 
 class OnboardingService:
 
+    # ──────────────────────────────────────────────
+    #  QUERIES — usan el schema real
+    # ──────────────────────────────────────────────
+
     async def get_negocio(self, telefono: str) -> dict | None:
-        """Obtiene el negocio del comerciante si ya completó onboarding."""
+        """Busca negocio por whatsapp_numero."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM negocios WHERE telefono = $1", telefono
+                "SELECT * FROM negocios WHERE whatsapp_numero = $1", telefono
             )
         return dict(row) if row else None
 
     async def get_sesion(self, telefono: str) -> dict | None:
-        """Obtiene el estado de sesión del usuario."""
+        """Obtiene sesión via join con negocios."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM sesiones WHERE telefono = $1", telefono
+                """
+                SELECT s.*
+                FROM sesiones s
+                JOIN negocios n ON n.id = s.negocio_id
+                WHERE n.whatsapp_numero = $1
+                ORDER BY s.created_at DESC
+                LIMIT 1
+                """,
+                telefono,
             )
         return dict(row) if row else None
 
-    async def upsert_sesion(self, telefono: str, estado: str, datos_temp: dict = None) -> None:
-        """Crea o actualiza la sesión del usuario."""
+    async def upsert_sesion(self, negocio_id: str, estado: str, datos_temp: dict = None) -> None:
+        """Crea o actualiza sesión por negocio_id."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO sesiones (telefono, estado, datos_temp, updated_at)
-                VALUES ($1, $2, $3::jsonb, NOW())
-                ON CONFLICT (telefono)
-                DO UPDATE SET estado = $2, datos_temp = $3::jsonb, updated_at = NOW()
+                INSERT INTO sesiones (negocio_id, estado_conversacion, datos_temporales)
+                VALUES ($1, $2, $3::jsonb)
+                ON CONFLICT (negocio_id)
+                DO UPDATE SET
+                    estado_conversacion = $2,
+                    datos_temporales    = $3::jsonb,
+                    ultimo_mensaje_at   = NOW()
                 """,
-                telefono,
+                negocio_id,
                 estado,
                 json.dumps(datos_temp or {}),
             )
 
-    async def registrar_negocio(
-        self, telefono: str, nombre: str, tipo_ropa: str, horario_cierre: str
-    ) -> None:
-        """Guarda el negocio configurado en la BD."""
+    async def crear_negocio(self, telefono: str) -> str:
+        """Crea registro inicial del negocio. Retorna el UUID."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO negocios (whatsapp_numero, estado, onboarding_completo)
+                VALUES ($1, 'onboarding', false)
+                ON CONFLICT (whatsapp_numero) DO UPDATE
+                    SET updated_at = NOW()
+                RETURNING id
+                """,
+                telefono,
+            )
+        return str(row["id"])
+
+    async def actualizar_negocio(self, negocio_id: str, **campos) -> None:
+        """Actualiza campos del negocio por id."""
+        if not campos:
+            return
+        sets = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(campos))
+        valores = list(campos.values())
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE negocios SET {sets}, updated_at = NOW() WHERE id = $1",
+                negocio_id, *valores,
+            )
+
+    async def completar_onboarding(self, negocio_id: str) -> None:
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO negocios (telefono, nombre, tipo_ropa, horario_cierre, onboarding_completo, created_at)
-                VALUES ($1, $2, $3, $4, true, NOW())
-                ON CONFLICT (telefono)
-                DO UPDATE SET
-                    nombre = $2,
-                    tipo_ropa = $3,
-                    horario_cierre = $4,
-                    onboarding_completo = true,
-                    updated_at = NOW()
+                UPDATE negocios
+                SET onboarding_completo = true, estado = 'activo', updated_at = NOW()
+                WHERE id = $1
                 """,
-                telefono, nombre, tipo_ropa, horario_cierre,
+                negocio_id,
             )
-        logger.info(f"✅ Negocio registrado: {nombre} ({telefono})")
+
+    # ──────────────────────────────────────────────
+    #  HELPERS
+    # ──────────────────────────────────────────────
 
     def _leer_datos_temp(self, sesion: dict) -> dict:
-        """Extrae datos_temp de la sesión de forma segura."""
         if not sesion:
             return {}
-        raw = sesion.get("datos_temp", {})
+        raw = sesion.get("datos_temporales", {})
         if isinstance(raw, str):
             try:
                 return json.loads(raw)
@@ -82,53 +120,63 @@ class OnboardingService:
                 return {}
         return raw or {}
 
+    # ──────────────────────────────────────────────
+    #  FLUJO PRINCIPAL
+    # ──────────────────────────────────────────────
+
     async def procesar(self, telefono: str, mensaje: str) -> str:
         """
-        Punto de entrada principal. Determina el paso actual y responde.
+        Punto de entrada. Determina el paso actual y responde.
         Retorna el texto a enviar por WhatsApp.
         """
+        negocio = await self.get_negocio(telefono)
+
+        # Si no existe, crear registro inicial
+        if not negocio:
+            negocio_id = await self.crear_negocio(telefono)
+            await self.upsert_sesion(negocio_id, "onboarding_1", {})
+            result = await gemini_service.procesar_onboarding(paso=1)
+            return result.get("respuesta", "¡Hola! Soy Boti 👋 ¿Cómo se llama tu negocio?")
+
+        negocio_id = str(negocio["id"])
         sesion = await self.get_sesion(telefono)
-        estado = sesion.get("estado", "onboarding_1") if sesion else "onboarding_1"
+        estado = sesion.get("estado_conversacion", "onboarding_1") if sesion else "onboarding_1"
         datos_temp = self._leer_datos_temp(sesion)
 
         logger.info(f"[Onboarding] {telefono} | estado={estado} | msg='{mensaje}'")
 
-        # ── PASO 1: Primer contacto → bienvenida ──
-        if not sesion or estado == "onboarding_1":
+        # ── PASO 1: Bienvenida ──
+        if estado == "onboarding_1":
             result = await gemini_service.procesar_onboarding(paso=1)
-            await self.upsert_sesion(telefono, "onboarding_2", {})
+            await self.upsert_sesion(negocio_id, "onboarding_2", {})
             return result.get("respuesta", "¡Hola! Soy Boti 👋 ¿Cómo se llama tu negocio?")
 
         # ── PASO 2: Guardar nombre → preguntar tipo de ropa ──
         elif estado == "onboarding_2":
-            datos_temp["nombre"] = mensaje.strip().title()
+            datos_temp["nombre_negocio"] = mensaje.strip().title()
+            await self.actualizar_negocio(negocio_id, nombre_negocio=datos_temp["nombre_negocio"])
             result = await gemini_service.procesar_onboarding(paso=2, mensaje_usuario=mensaje)
-            await self.upsert_sesion(telefono, "onboarding_3", datos_temp)
-            return result.get("respuesta", f"Perfecto 👌 ¿Qué tipo de ropa vendes? (dama, caballero, niños, todo)")
+            await self.upsert_sesion(negocio_id, "onboarding_3", datos_temp)
+            return result.get("respuesta", "¿Qué tipo de ropa vendes? (dama, caballero, niños, todo)")
 
-        # ── PASO 3: Guardar tipo ropa → preguntar horario ──
+        # ── PASO 3: Guardar rubro → preguntar horario ──
         elif estado == "onboarding_3":
-            datos_temp["tipo_ropa"] = mensaje.strip().lower()
+            datos_temp["rubro"] = mensaje.strip().lower()
+            await self.actualizar_negocio(negocio_id, rubro=datos_temp["rubro"])
             result = await gemini_service.procesar_onboarding(paso=3, mensaje_usuario=mensaje)
-            await self.upsert_sesion(telefono, "onboarding_4", datos_temp)
-            return result.get("respuesta", "¿A qué hora cierras tu tienda? Te mando el resumen del día a esa hora 📊")
+            await self.upsert_sesion(negocio_id, "onboarding_4", datos_temp)
+            return result.get("respuesta", "¿A qué hora cierras tu tienda? 📊")
 
-        # ── PASO 4: Guardar horario → completar onboarding ──
+        # ── PASO 4: Completar onboarding ──
         elif estado == "onboarding_4":
             datos_temp["horario_cierre"] = mensaje.strip()
-            await self.registrar_negocio(
-                telefono,
-                datos_temp.get("nombre", "Mi Negocio"),
-                datos_temp.get("tipo_ropa", "ropa variada"),
-                datos_temp.get("horario_cierre", "20:00"),
-            )
+            await self.completar_onboarding(negocio_id)
             result = await gemini_service.procesar_onboarding(paso=4, mensaje_usuario=mensaje)
-            await self.upsert_sesion(telefono, "activo", {})
-            return result.get("respuesta", "¡Todo listo! 🎉 Prueba con: 'Vendí 2 polos a S/25 cada uno'")
+            await self.upsert_sesion(negocio_id, "activo", {})
+            return result.get("respuesta", "¡Todo listo! 🎉 Prueba: 'Vendí 2 polos a S/25 cada uno'")
 
-        # Estado inesperado → reiniciar
         else:
-            await self.upsert_sesion(telefono, "onboarding_1", {})
+            await self.upsert_sesion(negocio_id, "onboarding_1", {})
             return "¡Hola! Soy Boti. ¿Cómo se llama tu negocio? 😊"
 
 

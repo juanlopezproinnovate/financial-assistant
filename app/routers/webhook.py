@@ -1,17 +1,6 @@
 """
-Router del webhook de YCloud — Día 2: NLP + Onboarding
-
-Estructura real del payload YCloud v2:
-{
-  "type": "whatsapp.inbound_message.received",
-  "whatsappInboundMessage": {
-    "from": "51912345678",
-    "type": "text",
-    "text": { "body": "Hola" }
-  }
-}
-
-YCloud reintenta hasta 7 veces si no recibe 200: 10s,30s,5m,30m,1h,2h,2h
+app/routers/webhook.py
+Adaptado al schema real del Día 1.
 """
 import logging
 from fastapi import APIRouter, Request, Header, HTTPException, status
@@ -22,13 +11,8 @@ from app.services.onboarding_service import onboarding_service
 from app.database import get_pool
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
-
-# ──────────────────────────────────────────────
-#  SEGURIDAD
-# ──────────────────────────────────────────────
 
 def _verify_token(token: str | None) -> None:
     if not settings.YCLOUD_WEBHOOK_TOKEN:
@@ -38,16 +22,11 @@ def _verify_token(token: str | None) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
 
 
-# ──────────────────────────────────────────────
-#  ENDPOINT PRINCIPAL
-# ──────────────────────────────────────────────
-
 @router.post("")
 async def receive_event(
     request: Request,
     x_ycloud_webhook_token: str | None = Header(default=None),
 ):
-    """Endpoint principal — YCloud siempre espera HTTP 200."""
     _verify_token(x_ycloud_webhook_token)
 
     body = await request.json()
@@ -66,10 +45,6 @@ async def receive_event(
 
     return {"status": "ok"}
 
-
-# ──────────────────────────────────────────────
-#  HANDLER DE MENSAJES ENTRANTES
-# ──────────────────────────────────────────────
 
 async def _handle_inbound(body: dict) -> None:
     msg: dict = body.get("whatsappInboundMessage", {})
@@ -90,7 +65,7 @@ async def _handle_inbound(body: dict) -> None:
     elif msg_type == "audio":
         audio_url: str = msg.get("audio", {}).get("url", "")
         logger.info(f"   Audio URL: {audio_url}")
-        # TODO Día 3: transcribir con Groq Whisper
+        # TODO Día 3: Groq Whisper
         await ycloud.send_text(from_number, "🎙️ Recibí tu audio, pronto lo proceso.")
 
     elif msg_type == "image":
@@ -100,24 +75,12 @@ async def _handle_inbound(body: dict) -> None:
         logger.info(f"   Tipo no manejado aún: {msg_type}")
 
 
-# ──────────────────────────────────────────────
-#  LÓGICA PRINCIPAL — NLP + ONBOARDING
-# ──────────────────────────────────────────────
-
 async def _process_text(from_number: str, text: str) -> None:
-    """
-    Flujo principal:
-    1. ¿Usuario nuevo o en onboarding? → flujo onboarding
-    2. ¿Usuario activo? → NLP con Gemini → guardar en BD → responder
-    """
     try:
         negocio = await onboarding_service.get_negocio(from_number)
-        sesion  = await onboarding_service.get_sesion(from_number)
-
         en_onboarding = (
             not negocio
             or not negocio.get("onboarding_completo")
-            or (sesion and sesion.get("estado", "").startswith("onboarding"))
         )
 
         # ── FLUJO A: Onboarding ──
@@ -128,8 +91,8 @@ async def _process_text(from_number: str, text: str) -> None:
 
         # ── FLUJO B: NLP activo ──
         contexto = {
-            "nombre":    negocio.get("nombre", ""),
-            "tipo_ropa": negocio.get("tipo_ropa", ""),
+            "nombre":    negocio.get("nombre_negocio", ""),
+            "tipo_ropa": negocio.get("rubro", ""),
         }
         result = await gemini_service.procesar_mensaje(
             mensaje=text,
@@ -142,29 +105,26 @@ async def _process_text(from_number: str, text: str) -> None:
 
         logger.info(f"[NLP] intent={intent} | datos={datos}")
 
-        # ── Persistir según intent ──
         if intent == "VENTA" and datos.get("total"):
             await _guardar_transaccion(
-                telefono  = from_number,
-                tipo      = "venta",
-                concepto  = datos.get("producto", "venta"),
-                monto     = datos.get("total", 0),
-                cantidad  = datos.get("cantidad", 1),
-                moneda    = datos.get("moneda", "PEN"),
+                negocio_id = str(negocio["id"]),
+                tipo       = "venta",
+                descripcion= datos.get("producto", "venta"),
+                monto      = datos.get("total", 0),
+                moneda     = datos.get("moneda", "PEN"),
             )
 
         elif intent == "GASTO" and datos.get("monto"):
             await _guardar_transaccion(
-                telefono  = from_number,
-                tipo      = "gasto",
-                concepto  = datos.get("concepto", "gasto"),
-                monto     = datos.get("monto", 0),
-                moneda    = datos.get("moneda", "PEN"),
-                categoria = datos.get("categoria", "otros"),
+                negocio_id  = str(negocio["id"]),
+                tipo        = "gasto",
+                descripcion = datos.get("concepto", "gasto"),
+                monto       = datos.get("monto", 0),
+                moneda      = datos.get("moneda", "PEN"),
             )
 
         elif intent == "REPORTE":
-            datos_reporte = await _obtener_reporte(from_number, datos.get("periodo", "hoy"))
+            datos_reporte = await _obtener_reporte(str(negocio["id"]), datos.get("periodo", "hoy"))
             respuesta = await gemini_service.generar_resumen_reporte(datos_reporte)
 
         await ycloud.send_text(from_number, respuesta)
@@ -174,41 +134,32 @@ async def _process_text(from_number: str, text: str) -> None:
         await ycloud.send_text(from_number, "Tuve un error técnico. Intenta de nuevo 🙏")
 
 
-# ──────────────────────────────────────────────
-#  HELPERS DE BD
-# ──────────────────────────────────────────────
-
 async def _guardar_transaccion(
-    telefono: str,
+    negocio_id: str,
     tipo: str,
-    concepto: str,
+    descripcion: str,
     monto: float,
-    cantidad: int = 1,
     moneda: str = "PEN",
-    categoria: str = "otros",
 ) -> None:
-    precio_unitario = monto / cantidad if cantidad > 0 else monto
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO transacciones
-                (telefono, tipo, concepto, monto, cantidad, precio_unitario, moneda, categoria, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                (negocio_id, tipo, descripcion, monto, moneda, fecha, origen_registro)
+            VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, 'whatsapp')
             """,
-            telefono, tipo, concepto,
-            float(monto), int(cantidad), float(precio_unitario),
-            moneda, categoria,
+            negocio_id, tipo, descripcion, float(monto), moneda,
         )
-    logger.info(f"💾 {tipo.upper()} guardada: {concepto} | S/{monto}")
+    logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto}")
 
 
-async def _obtener_reporte(telefono: str, periodo: str) -> dict:
+async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:
     filtros = {
-        "hoy":   "DATE(created_at AT TIME ZONE 'America/Lima') = CURRENT_DATE",
-        "ayer":  "DATE(created_at AT TIME ZONE 'America/Lima') = CURRENT_DATE - 1",
-        "semana":"created_at >= NOW() - INTERVAL '7 days'",
-        "mes":   "created_at >= NOW() - INTERVAL '30 days'",
+        "hoy":   "fecha = CURRENT_DATE",
+        "ayer":  "fecha = CURRENT_DATE - 1",
+        "semana":"fecha >= CURRENT_DATE - 7",
+        "mes":   "fecha >= CURRENT_DATE - 30",
     }
     where = filtros.get(periodo, filtros["hoy"])
 
@@ -221,17 +172,17 @@ async def _obtener_reporte(telefono: str, periodo: str) -> dict:
                 COALESCE(SUM(monto) FILTER (WHERE tipo = 'gasto'), 0) AS total_gastos,
                 COUNT(*)           FILTER (WHERE tipo = 'venta')       AS num_ventas
             FROM transacciones
-            WHERE telefono = $1 AND {where}
+            WHERE negocio_id = $1 AND {where}
             """,
-            telefono,
+            negocio_id,
         )
 
     tv = float(row["total_ventas"])
     tg = float(row["total_gastos"])
     return {
-        "periodo":          periodo,
-        "total_ventas":     tv,
-        "total_gastos":     tg,
+        "periodo":           periodo,
+        "total_ventas":      tv,
+        "total_gastos":      tg,
         "num_transacciones": int(row["num_ventas"]),
-        "ganancia_neta":    tv - tg,
+        "ganancia_neta":     tv - tg,
     }
