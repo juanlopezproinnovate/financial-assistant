@@ -7,3 +7,5 @@ apscheduler==3.10.4
 httpx==0.27.2
 python-dotenv==1.0.1
 python-multipart==0.0.12
+boto3==1.34.0
+supabase==2.4.0

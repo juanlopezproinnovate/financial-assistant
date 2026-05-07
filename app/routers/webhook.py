@@ -9,6 +9,9 @@ from app.services.gemini_service import gemini_service
 from app.services.onboarding_service import onboarding_service
 from app.services.groq_service import procesar_audio_whatsapp
 from app.database import get_pool
+from app.services.polly_service import polly_service
+from app.services.storage_service import upload_audio_to_supabase
+import uuid
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
@@ -63,7 +66,7 @@ async def _handle_inbound(body: dict) -> None:
     if msg_type == "text":
         text: str = msg.get("text", {}).get("body", "").strip()
         logger.info(f"   Texto: {text!r}")
-        await _process_text(from_number, text)
+        await _process_text(from_number, text, es_audio = False)
 
     elif msg_type == "audio":
         await _process_audio(from_number, msg)
@@ -114,10 +117,10 @@ async def _process_audio(from_number: str, msg: dict) -> None:
     await ycloud.send_text(from_number, f"🎙️ Escuché: «{texto_transcrito}»")
 
     # Procesar igual que texto normal
-    await _process_text(from_number, texto_transcrito)
+    await _process_text(from_number, texto_transcrito, es_audio = True)
 
 
-async def _process_text(from_number: str, text: str) -> None:
+async def _process_text(from_number: str, text: str, es_audio: bool = False) -> None:
     try:
         negocio = await onboarding_service.get_negocio(from_number)
         en_onboarding = (
@@ -129,6 +132,9 @@ async def _process_text(from_number: str, text: str) -> None:
         if en_onboarding:
             respuesta = await onboarding_service.procesar(from_number, text)
             await ycloud.send_text(from_number, respuesta)
+            # En onboarding también podemos responder con voz si el usuario inició con audio
+            if es_audio:
+                await _responder_con_voz(from_number, respuesta)
             return
 
         # ── FLUJO B: NLP activo ──
@@ -169,11 +175,40 @@ async def _process_text(from_number: str, text: str) -> None:
             datos_reporte = await _obtener_reporte(str(negocio["id"]), datos.get("periodo", "hoy"))
             respuesta = await gemini_service.generar_resumen_reporte(datos_reporte)
 
+        # Siempre enviamos texto primero (mejor UX)
         await ycloud.send_text(from_number, respuesta)
+
+        # ── FLUJO C: Respuesta de Voz (Solo si el origen fue audio) ──
+        if es_audio:
+            await _responder_con_voz(from_number, respuesta)
 
     except Exception as e:
         logger.error(f"[_process_text] Error: {e}", exc_info=True)
         await ycloud.send_text(from_number, "Tuve un error técnico. Intenta de nuevo 🙏")
+
+async def _responder_con_voz(from_number: str, texto: str) -> None:
+    """Función auxiliar para no ensuciar el proceso principal"""
+    try:
+        # 1. Generar audio local en /tmp/
+        local_path = await polly_service.text_to_speech(texto)
+        if not local_path:
+            return
+
+        # 2. Nombre único para evitar colisiones en Supabase
+        file_name = f"voz_{uuid.uuid4()}.mp3"
+        
+        # 3. Subir a Supabase y obtener URL pública
+        url_publica = await upload_audio_to_supabase(local_path, file_name)
+        
+        # 4. Enviar a través de YCloud
+        await ycloud.send_audio(from_number, url_publica)
+        
+        # 5. Limpieza: borrar archivo temporal de Railway
+        if os.path.exists(local_path):
+            os.remove(local_path)
+            
+    except Exception as e:
+        logger.error(f"[Voz] Error al generar/enviar audio: {e}")
 
 
 async def _guardar_transaccion(

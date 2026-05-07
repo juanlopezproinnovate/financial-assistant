@@ -23,6 +23,29 @@ def _headers() -> dict:
     }
 
 
+async def send_audio(to: str, audio_url: str):
+    payload = {
+        "from": settings.YCLOUD_PHONE,
+        "to": to,
+        "type": "audio",
+        "audio": {"link": audio_url}
+    }
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{settings.YCLOUD_API_BASE}/whatsapp/messages",
+            headers=_headers(),
+            json=payload,
+        )
+
+    if resp.status_code not in (200, 201):
+        logger.error(f"YCloud error {resp.status_code}: {resp.text}")
+        resp.raise_for_status()
+
+    data = resp.json()
+    logger.info(f"✉️  Mensaje de voz enviado a {to} | id={data.get('id')}")
+    return data
+
 async def send_text(to: str, text: str) -> dict:
     """
     Envía un mensaje de texto plano a un número de WhatsApp.

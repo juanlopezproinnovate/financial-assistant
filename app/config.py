@@ -8,6 +8,15 @@ load_dotenv()
 
 
 class Settings:
+
+    AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    AWS_REGION_NAME: str = os.getenv("AWS_REGION_NAME", "us-east-1")
+
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "") # ej: https://xyz.supabase.co
+    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "") # Service Role Key (importante para subir archivos)
+    SUPABASE_BUCKET: str = "audios-bot"
+
     # YCloud
     YCLOUD_API_KEY: str = os.getenv("YCLOUD_API_KEY", "5b8cb6df4a9d5564d9a4025666b48816")
     YCLOUD_WEBHOOK_TOKEN: str = os.getenv("YCLOUD_WEBHOOK_TOKEN", "")
