@@ -47,11 +47,14 @@ async def receive_event(
 
 
 async def _handle_inbound(body: dict) -> None:
+
+    logger.info(f"[RAW BODY*] {body}")
     msg: dict = body.get("whatsappInboundMessage", {})
     from_number: str = msg.get("from", "")
     msg_type: str = msg.get("type", "")
 
     logger.info(f"📨 Mensaje de {from_number} | tipo={msg_type}")
+    logger.info(f"[RAW BODY_] {body}")
 
     if not from_number:
         logger.warning("Webhook sin 'from' — ignorado")
