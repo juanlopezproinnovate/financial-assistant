@@ -1,6 +1,5 @@
 """
 app/routers/webhook.py
-Adaptado al schema real del Día 1.
 """
 import logging
 from fastapi import APIRouter, Request, Header, HTTPException, status
@@ -8,6 +7,7 @@ from app.config import settings
 from app.services import ycloud
 from app.services.gemini_service import gemini_service
 from app.services.onboarding_service import onboarding_service
+from app.services.groq_service import procesar_audio_whatsapp
 from app.database import get_pool
 
 logger = logging.getLogger(__name__)
@@ -63,16 +63,48 @@ async def _handle_inbound(body: dict) -> None:
         await _process_text(from_number, text)
 
     elif msg_type == "audio":
-        audio_url: str = msg.get("audio", {}).get("url", "")
-        logger.info(f"   Audio URL: {audio_url}")
-        # TODO Día 3: Groq Whisper
-        await ycloud.send_text(from_number, "🎙️ Recibí tu audio, pronto lo proceso.")
+        await _process_audio(from_number, msg)
 
     elif msg_type == "image":
         await ycloud.send_text(from_number, "🖼️ Recibí tu imagen.")
 
     else:
         logger.info(f"   Tipo no manejado aún: {msg_type}")
+
+
+async def _process_audio(from_number: str, msg: dict) -> None:
+    """
+    Pipeline de audio:
+    1. Avisa que está procesando
+    2. Descarga y transcribe con Groq
+    3. Procesa el texto como si lo hubiera escrito
+    """
+    await ycloud.send_text(from_number, "🎙️ Escuchando tu audio...")
+
+    audio_data = msg.get("audio", {})
+    audio_url  = audio_data.get("url", "")
+    mime_type  = audio_data.get("mimeType", "audio/ogg")
+
+    if not audio_url:
+        await ycloud.send_text(from_number, "No pude acceder al audio. ¿Puedes escribirlo? ✍️")
+        return
+
+    texto_transcrito = await procesar_audio_whatsapp(audio_url, mime_type)
+
+    if not texto_transcrito:
+        await ycloud.send_text(
+            from_number,
+            "No entendí el audio 😅 ¿Puedes escribirlo o intentar de nuevo?"
+        )
+        return
+
+    logger.info(f"[Audio→Texto] {from_number}: '{texto_transcrito}'")
+
+    # Confirmar transcripción al usuario
+    await ycloud.send_text(from_number, f"🎙️ Escuché: «{texto_transcrito}»")
+
+    # Procesar igual que texto normal
+    await _process_text(from_number, texto_transcrito)
 
 
 async def _process_text(from_number: str, text: str) -> None:
@@ -107,11 +139,11 @@ async def _process_text(from_number: str, text: str) -> None:
 
         if intent == "VENTA" and datos.get("total"):
             await _guardar_transaccion(
-                negocio_id = str(negocio["id"]),
-                tipo       = "venta",
-                descripcion= datos.get("producto", "venta"),
-                monto      = datos.get("total", 0),
-                moneda     = datos.get("moneda", "PEN"),
+                negocio_id  = str(negocio["id"]),
+                tipo        = "venta",
+                descripcion = datos.get("producto", "venta"),
+                monto       = datos.get("total", 0),
+                moneda      = datos.get("moneda", "PEN"),
             )
 
         elif intent == "GASTO" and datos.get("monto"):
