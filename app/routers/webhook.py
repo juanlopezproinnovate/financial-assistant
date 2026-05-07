@@ -81,9 +81,16 @@ async def _process_audio(from_number: str, msg: dict) -> None:
     """
     await ycloud.send_text(from_number, "🎙️ Escuchando tu audio...")
 
+    # LOG: ver todo el contenido del msg
+    logger.info(f"[Audio] msg completo: {msg}")
+
     audio_data = msg.get("audio", {})
+    logger.info(f"[Audio] audio_data: {audio_data}")
+
     audio_url  = audio_data.get("url", "")
     mime_type  = audio_data.get("mimeType", "audio/ogg")
+
+    logger.info(f"[Audio] url='{audio_url}' | mime='{mime_type}'")
 
     if not audio_url:
         await ycloud.send_text(from_number, "No pude acceder al audio. ¿Puedes escribirlo? ✍️")
