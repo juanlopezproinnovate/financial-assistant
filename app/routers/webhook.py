@@ -90,8 +90,8 @@ async def _process_audio(from_number: str, msg: dict) -> None:
     audio_data = msg.get("audio", {})
     logger.info(f"[Audio] audio_data: {audio_data}")
 
-    audio_url  = audio_data.get("url", "")
-    mime_type  = audio_data.get("mimeType", "audio/ogg")
+    audio_url  = audio_data.get("link", "")
+    mime_type  = audio_data.get("mime_type", "audio/ogg")
 
     logger.info(f"[Audio] url='{audio_url}' | mime='{mime_type}'")
 
