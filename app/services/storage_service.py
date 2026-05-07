@@ -30,6 +30,8 @@ async def upload_audio_to_supabase(file_path: str, file_name: str) -> str:
         
         # En versiones recientes de la librería, res puede ser un string directo 
         # o un objeto con la propiedad public_url. Ajustamos por seguridad:
+        if isinstance(res, dict):
+            return res.get("publicURL", "")
         return str(res)
         
     except Exception as e:
