@@ -4,6 +4,24 @@ from functools import partial
 from supabase import create_client, Client
 from app.config import settings
 
+import httpx
+
+# Monkeypatch httpx.Client para soportar supabase==2.10.0 con httpx==0.27.2
+_original_client_init = httpx.Client.__init__
+def _patched_client_init(self, *args, **kwargs):
+    if 'proxy' in kwargs:
+        kwargs['proxies'] = kwargs.pop('proxy')
+    _original_client_init(self, *args, **kwargs)
+
+_original_async_client_init = httpx.AsyncClient.__init__
+def _patched_async_client_init(self, *args, **kwargs):
+    if 'proxy' in kwargs:
+        kwargs['proxies'] = kwargs.pop('proxy')
+    _original_async_client_init(self, *args, **kwargs)
+
+httpx.Client.__init__ = _patched_client_init
+httpx.AsyncClient.__init__ = _patched_async_client_init
+
 # Inicializamos el cliente
 supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 

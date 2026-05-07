@@ -345,19 +345,26 @@ async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> li
             """
             SELECT id, tipo, descripcion, monto, moneda, to_char(created_at, 'HH24:MI') as hora
             FROM transacciones
-            WHERE negocio_id = $1
+            WHERE negocio_id = $1::uuid
             ORDER BY created_at DESC
             LIMIT $2
             """,
             negocio_id, limite
         )
-    return [dict(r) for r in rows]
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["id"] = str(d["id"])
+        if d.get("monto") is not None:
+            d["monto"] = float(d["monto"])
+        res.append(d)
+    return res
 
 
 async def _eliminar_transaccion(transaccion_id: str) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM transacciones WHERE id = $1", transaccion_id)
+        await conn.execute("DELETE FROM transacciones WHERE id = $1::uuid", transaccion_id)
     logger.info(f"🗑️ Transacción eliminada: {transaccion_id}")
 
 
@@ -369,7 +376,7 @@ async def _actualizar_transaccion(transaccion_id: str, actualizaciones: dict) ->
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            f"UPDATE transacciones SET {sets} WHERE id = $1",
+            f"UPDATE transacciones SET {sets} WHERE id = $1::uuid",
             transaccion_id, *valores
         )
     logger.info(f"✏️ Transacción actualizada: {transaccion_id} | {actualizaciones}")
