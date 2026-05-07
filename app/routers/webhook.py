@@ -137,7 +137,64 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 await _responder_con_voz(from_number, respuesta)
             return
 
-        # ── FLUJO B: NLP activo ──
+        # ── FLUJO B1: Estados de Edición/Eliminación ──
+        sesion = await onboarding_service.get_sesion(from_number)
+        estado = sesion.get("estado_conversacion", "activo") if sesion else "activo"
+        datos_temp = onboarding_service._leer_datos_temp(sesion)
+        negocio_id_str = str(negocio["id"])
+
+        if estado in ["ESPERANDO_SELECCION_ELIMINAR", "ESPERANDO_SELECCION_EDITAR"]:
+            if text.lower().strip() == "cancelar":
+                await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                await ycloud.send_text(from_number, "Operación cancelada. ¿En qué más te ayudo? 😊")
+                return
+            
+            try:
+                seleccion = int(text.strip())
+                ultimas = datos_temp.get("ultimas_transacciones", [])
+                if 1 <= seleccion <= len(ultimas):
+                    tx = ultimas[seleccion - 1]
+                    if estado == "ESPERANDO_SELECCION_ELIMINAR":
+                        await _eliminar_transaccion(tx["id"])
+                        await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                        await ycloud.send_text(from_number, f"✅ Transacción eliminada: {tx['descripcion']} ({tx['moneda']} {tx['monto']})")
+                        return
+                    else: # ESPERANDO_SELECCION_EDITAR
+                        datos_temp["transaccion_a_editar"] = tx
+                        await onboarding_service.upsert_sesion(negocio_id_str, "ESPERANDO_EDICION_TRANSACCION", datos_temp)
+                        await ycloud.send_text(from_number, f"Elegiste: {tx['descripcion']} ({tx['moneda']} {tx['monto']}).\n¿Qué deseas cambiar? (ej. 'cambia el monto a 50' o 'cancelar')")
+                        return
+                else:
+                    await ycloud.send_text(from_number, "Por favor envía un número válido de la lista o 'cancelar'.")
+                    return
+            except ValueError:
+                await ycloud.send_text(from_number, "Por favor envía un número o la palabra 'cancelar'.")
+                return
+
+        elif estado == "ESPERANDO_EDICION_TRANSACCION":
+            if text.lower().strip() == "cancelar":
+                await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                await ycloud.send_text(from_number, "Edición cancelada. ¿En qué más te ayudo? 😊")
+                return
+            
+            tx = datos_temp.get("transaccion_a_editar")
+            if not tx:
+                await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                await ycloud.send_text(from_number, "Ocurrió un error. Operación cancelada.")
+                return
+
+            # Llamar a Llama para interpretar los cambios
+            cambios = await gemini_service.interpretar_edicion(tx, text)
+            if cambios:
+                await _actualizar_transaccion(tx["id"], cambios)
+                await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                cambios_str = ", ".join([f"{k}: {v}" for k, v in cambios.items()])
+                await ycloud.send_text(from_number, f"✅ Transacción actualizada correctamente.\nCambios aplicados: {cambios_str}")
+            else:
+                await ycloud.send_text(from_number, "No entendí qué cambiar 🤔. Intenta decirlo de otra forma o escribe 'cancelar'.")
+            return
+
+        # ── FLUJO B2: NLP activo ──
         contexto = {
             "nombre":    negocio.get("nombre_negocio", ""),
             "tipo_ropa": negocio.get("rubro", ""),
@@ -174,6 +231,22 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
         elif intent == "REPORTE":
             datos_reporte = await _obtener_reporte(str(negocio["id"]), datos.get("periodo", "hoy"))
             respuesta = await gemini_service.generar_resumen_reporte(datos_reporte)
+
+        elif intent in ["ELIMINAR_TRANSACCION", "EDITAR_TRANSACCION"]:
+            ultimas = await _obtener_ultimas_transacciones(str(negocio["id"]), 5)
+            if not ultimas:
+                respuesta = "No tienes transacciones recientes para modificar."
+            else:
+                accion = "eliminar" if intent == "ELIMINAR_TRANSACCION" else "editar"
+                nuevo_estado = "ESPERANDO_SELECCION_ELIMINAR" if intent == "ELIMINAR_TRANSACCION" else "ESPERANDO_SELECCION_EDITAR"
+                
+                await onboarding_service.upsert_sesion(str(negocio["id"]), nuevo_estado, {"ultimas_transacciones": ultimas})
+                
+                lineas = [f"Estas son tus últimas transacciones. ¿Cuál deseas {accion}?:"]
+                for i, t in enumerate(ultimas, 1):
+                    lineas.append(f"{i}. {t['tipo'].capitalize()}: {t['descripcion']} - {t['moneda']} {t['monto']} ({t['hora']})")
+                lineas.append("\nEscribe el número, o 'cancelar' para salir.")
+                respuesta = "\n".join(lineas)
 
         # Siempre enviamos texto primero (mejor UX)
         await ycloud.send_text(from_number, respuesta)
@@ -263,3 +336,40 @@ async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:
         "num_transacciones": int(row["num_ventas"]),
         "ganancia_neta":     tv - tg,
     }
+
+
+async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> list[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, tipo, descripcion, monto, moneda, to_char(created_at, 'HH24:MI') as hora
+            FROM transacciones
+            WHERE negocio_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            negocio_id, limite
+        )
+    return [dict(r) for r in rows]
+
+
+async def _eliminar_transaccion(transaccion_id: str) -> None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM transacciones WHERE id = $1", transaccion_id)
+    logger.info(f"🗑️ Transacción eliminada: {transaccion_id}")
+
+
+async def _actualizar_transaccion(transaccion_id: str, actualizaciones: dict) -> None:
+    if not actualizaciones:
+        return
+    sets = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(actualizaciones))
+    valores = list(actualizaciones.values())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE transacciones SET {sets} WHERE id = $1",
+            transaccion_id, *valores
+        )
+    logger.info(f"✏️ Transacción actualizada: {transaccion_id} | {actualizaciones}")

@@ -41,7 +41,7 @@ SIEMPRE responde SOLO con JSON válido. Sin texto antes ni después. Sin markdow
 
 Estructura OBLIGATORIA:
 {
-  "intent": "VENTA|GASTO|INVENTARIO|REPORTE|AYUDA|SALUDO|DESCONOCIDO",
+  "intent": "VENTA|GASTO|INVENTARIO|REPORTE|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|DESCONOCIDO",
   "datos": {},
   "respuesta": "texto para WhatsApp",
   "requiere_confirmacion": false,
@@ -49,6 +49,12 @@ Estructura OBLIGATORIA:
 }
 
 INTENTS:
+
+ELIMINAR_TRANSACCION — frases: eliminar transaccion, borrar la ultima venta, me equivoque borra eso
+datos: {}
+
+EDITAR_TRANSACCION — frases: editar transaccion, cambiar monto de la venta, quiero modificar un gasto
+datos: {}
 
 VENTA — frases: vendí, vendiste, vendimos, salió una, me llevaron, acabo de vender
 datos: {"producto": str, "cantidad": int, "precio_unitario": float, "total": float, "moneda": "PEN|USD|BOB"}
@@ -76,6 +82,8 @@ EJEMPLOS:
 "vendí 3 polos a 25 soles" → VENTA, producto:polo, cantidad:3, precio_unitario:25, total:75, moneda:PEN
 "gasté 200 en pasajes a Bolivia" → GASTO, concepto:pasajes Bolivia, monto:200, moneda:PEN, categoria:transporte
 "cuánto vendí hoy" → REPORTE, periodo:hoy
+"borra esa venta" → ELIMINAR_TRANSACCION
+"quiero modificar el monto" → EDITAR_TRANSACCION
 "hola" → SALUDO
 """
 
@@ -217,6 +225,33 @@ Solo responde el texto, sin JSON."""
                 f"📦 Gastos: S/{tg:.2f}\n"
                 f"✅ Ganancia: S/{tv - tg:.2f}"
             )
+
+    async def interpretar_edicion(self, transaccion: dict, mensaje: str) -> dict:
+        prompt = f"""Eres Boti. Un usuario quiere editar una transacción existente.
+Transacción actual:
+{json.dumps(transaccion, ensure_ascii=False)}
+
+El usuario ha dicho: "{mensaje}"
+
+Devuelve SOLO un JSON con los campos de la transacción que deben actualizarse. 
+Posibles campos: "descripcion", "monto", "moneda", "tipo".
+Ejemplo: si dice "cambia el monto a 50", devuelve {{"monto": 50}}.
+Si dice "era en dolares", devuelve {{"moneda": "USD"}}.
+Si dice "la descripcion era polos", devuelve {{"descripcion": "polos"}}.
+Si no entiendes qué cambiar, devuelve un JSON vacío {{}}.
+No incluyas texto adicional ni markdown."""
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=150,
+            )
+            raw = response.choices[0].message.content.strip()
+            return self._parsear(raw)
+        except Exception as e:
+            logger.error(f"[Groq] Error interpretando edición: {e}")
+            return {}
 
 
 gemini_service = GeminiService()
