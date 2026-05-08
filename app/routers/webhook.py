@@ -319,13 +319,21 @@ async def _guardar_transaccion(
     pool = await get_pool()
     async with pool.acquire() as conn:
         if fecha and hora:
+            try:
+                # asyncpg requiere objetos nativos de Python para campos date/time
+                fecha_obj = datetime.date.fromisoformat(fecha)
+                hora_obj = datetime.time.fromisoformat(hora)
+            except ValueError:
+                fecha_obj = datetime.date.today()
+                hora_obj = datetime.time(12, 0)
+                
             await conn.execute(
                 """
                 INSERT INTO transacciones
                     (negocio_id, tipo, descripcion, monto, moneda, fecha, hora, origen_registro)
-                VALUES ($1, $2, $3, $4, $5, $6::date, $7::time, 'whatsapp')
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp')
                 """,
-                negocio_id, tipo, descripcion, float(monto), moneda, fecha, hora
+                negocio_id, tipo, descripcion, float(monto), moneda, fecha_obj, hora_obj
             )
         else:
             await conn.execute(
