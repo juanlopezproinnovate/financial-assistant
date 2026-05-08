@@ -243,8 +243,11 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 await onboarding_service.upsert_sesion(str(negocio["id"]), nuevo_estado, {"ultimas_transacciones": ultimas})
                 
                 lineas = [f"Estas son tus últimas transacciones. ¿Cuál deseas {accion}?:"]
+                simbolos_moneda = {"PEN": "S/", "USD": "$", "BOB": "Bs."}
                 for i, t in enumerate(ultimas, 1):
-                    lineas.append(f"{i}. {t['tipo'].capitalize()}: {t['descripcion']} - {t['moneda']} {t['monto']} ({t['hora']})")
+                    simbolo = simbolos_moneda.get(t['moneda'], t['moneda'])
+                    monto_formateado = f"{t['monto']:.2f}"
+                    lineas.append(f"{i}. {t.get('fecha_corta', '')} | {t['descripcion']} | {simbolo} {monto_formateado}")
                 lineas.append("\nEscribe el número, o 'cancelar' para salir.")
                 respuesta = "\n".join(lineas)
 
@@ -343,10 +346,17 @@ async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> li
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, tipo, descripcion, monto, moneda, to_char(created_at, 'HH24:MI') as hora
-            FROM transacciones
-            WHERE negocio_id = $1::uuid
-            ORDER BY created_at DESC
+            SELECT 
+                t.id, 
+                t.tipo, 
+                t.descripcion, 
+                t.monto, 
+                t.moneda, 
+                to_char(t.created_at AT TIME ZONE COALESCE(n.zona_horaria, 'America/Lima'), 'DD/MM') as fecha_corta
+            FROM transacciones t
+            JOIN negocios n ON n.id = t.negocio_id
+            WHERE t.negocio_id = $1::uuid
+            ORDER BY t.created_at DESC
             LIMIT $2
             """,
             negocio_id, limite
