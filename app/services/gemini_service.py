@@ -65,10 +65,9 @@ GASTO — frases: gasté, pagué, compré mercadería, flete, pasajes, alquiler
 datos: {"concepto": str, "monto": float, "moneda": "PEN|USD|BOB", "categoria": "mercaderia|transporte|local|servicios|otros", "fecha": "YYYY-MM-DD", "hora": "HH:MM:SS"}
 
 FECHAS Y HORAS:
-Si el usuario especifica fecha (ayer, hace 3 días, etc.), calcúlala basándote en la "Fecha de hoy" provista.
-Si no especifica fecha, usa la "Fecha de hoy".
-Si no especifica hora, pon "12:00:00" por defecto.
-Asegúrate de SIEMPRE devolver "fecha" y "hora" en VENTA y GASTO.
+Si el usuario especifica fecha (ayer, hace 3 días, etc.), calcúlala basándote en la "Fecha de hoy" provista y devuelve "fecha".
+Si el usuario especifica hora, devuelve "hora".
+Si NO especifica fecha o hora, simplemente OMITE esos campos en el JSON.
 
 INVENTARIO — frases: tengo, me quedan, llegaron, entró mercadería
 datos: {"producto": str, "cantidad": int}

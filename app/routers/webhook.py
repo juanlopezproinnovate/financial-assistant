@@ -214,6 +214,24 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
 
         logger.info(f"[NLP] intent={intent} | datos={datos}")
 
+        if intent in ["VENTA", "GASTO"]:
+            from zoneinfo import ZoneInfo
+            zona_str = negocio.get("zona_horaria") or "America/Lima"
+            try:
+                tz = ZoneInfo(zona_str)
+            except Exception:
+                tz = ZoneInfo("America/Lima")
+            ahora_local = datetime.datetime.now(tz)
+            
+            f_fecha = datos.get("fecha") or ahora_local.strftime("%Y-%m-%d")
+            f_hora = datos.get("hora") or ahora_local.strftime("%H:%M:%S")
+            
+            # Moneda del negocio
+            moneda_negocio = negocio.get("monedas_aceptadas", "PEN")
+            if not moneda_negocio: moneda_negocio = "PEN"
+            simbolos = {"PEN": "S/", "USD": "$", "BOB": "Bs."}
+            simbolo = simbolos.get(moneda_negocio.split(",")[0].strip(), "S/")
+
         if intent == "VENTA" and datos.get("total"):
             await _guardar_transaccion(
                 negocio_id  = str(negocio["id"]),
@@ -224,11 +242,7 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 fecha       = datos.get("fecha"),
                 hora        = datos.get("hora"),
             )
-            simbolos = {"PEN": "S/", "USD": "$", "BOB": "Bs."}
-            simbolo = simbolos.get(datos.get("moneda", "PEN"), datos.get("moneda", "PEN"))
             nombre_propio = negocio.get("nombre_propietario") or negocio.get("nombre_negocio") or "Comerciante"
-            f_fecha = datos.get("fecha") or datetime.date.today().isoformat()
-            f_hora = datos.get("hora") or "12:00:00"
             respuesta = f"✅ Registro añadido correctamente \"{nombre_propio}\"\n\n📅 Fecha: {f_fecha} {f_hora}\n🔄 Tipo: Venta\n🏷️ Categoría: Venta\n📝 Descripción: {datos.get('producto', '')}\n💰 Monto: {simbolo} {datos.get('total', 0):.2f}"
 
         elif intent == "GASTO" and datos.get("monto"):
@@ -241,11 +255,7 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 fecha       = datos.get("fecha"),
                 hora        = datos.get("hora"),
             )
-            simbolos = {"PEN": "S/", "USD": "$", "BOB": "Bs."}
-            simbolo = simbolos.get(datos.get("moneda", "PEN"), datos.get("moneda", "PEN"))
             nombre_propio = negocio.get("nombre_propietario") or negocio.get("nombre_negocio") or "Comerciante"
-            f_fecha = datos.get("fecha") or datetime.date.today().isoformat()
-            f_hora = datos.get("hora") or "12:00:00"
             respuesta = f"✅ Registro añadido correctamente \"{nombre_propio}\"\n\n📅 Fecha: {f_fecha} {f_hora}\n🔄 Tipo: Gasto\n🏷️ Categoría: {str(datos.get('categoria', 'Otros')).capitalize()}\n📝 Descripción: {datos.get('concepto', '')}\n💰 Monto: {simbolo} {datos.get('monto', 0):.2f}"
 
         elif intent == "REPORTE":
