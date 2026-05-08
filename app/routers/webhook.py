@@ -1,7 +1,9 @@
 """
 app/routers/webhook.py
 """
+import os
 import logging
+import datetime
 from fastapi import APIRouter, Request, Header, HTTPException, status
 from app.config import settings
 from app.services import ycloud
@@ -154,15 +156,17 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 ultimas = datos_temp.get("ultimas_transacciones", [])
                 if 1 <= seleccion <= len(ultimas):
                     tx = ultimas[seleccion - 1]
+                    simbolos_moneda = {"PEN": "S/", "USD": "$", "BOB": "Bs."}
+                    simbolo = simbolos_moneda.get(tx['moneda'], tx['moneda'])
                     if estado == "ESPERANDO_SELECCION_ELIMINAR":
                         await _eliminar_transaccion(tx["id"])
                         await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
-                        await ycloud.send_text(from_number, f"✅ Transacción eliminada: {tx['descripcion']} ({tx['moneda']} {tx['monto']})")
+                        await ycloud.send_text(from_number, f"✅ Transacción eliminada: {tx['descripcion']} ({simbolo} {tx['monto']:.2f})")
                         return
                     else: # ESPERANDO_SELECCION_EDITAR
                         datos_temp["transaccion_a_editar"] = tx
                         await onboarding_service.upsert_sesion(negocio_id_str, "ESPERANDO_EDICION_TRANSACCION", datos_temp)
-                        await ycloud.send_text(from_number, f"Elegiste: {tx['descripcion']} ({tx['moneda']} {tx['monto']}).\n¿Qué deseas cambiar? (ej. 'cambia el monto a 50' o 'cancelar')")
+                        await ycloud.send_text(from_number, f"Elegiste: {tx['descripcion']} ({simbolo} {tx['monto']:.2f}).\n¿Qué deseas cambiar? (ej. 'cambia el monto a 50' o 'cancelar')")
                         return
                 else:
                     await ycloud.send_text(from_number, "Por favor envía un número válido de la lista o 'cancelar'.")
@@ -217,7 +221,15 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 descripcion = datos.get("producto", "venta"),
                 monto       = datos.get("total", 0),
                 moneda      = datos.get("moneda", "PEN"),
+                fecha       = datos.get("fecha"),
+                hora        = datos.get("hora"),
             )
+            simbolos = {"PEN": "S/", "USD": "$", "BOB": "Bs."}
+            simbolo = simbolos.get(datos.get("moneda", "PEN"), datos.get("moneda", "PEN"))
+            nombre_propio = negocio.get("nombre_propietario") or negocio.get("nombre_negocio") or "Comerciante"
+            f_fecha = datos.get("fecha") or datetime.date.today().isoformat()
+            f_hora = datos.get("hora") or "12:00:00"
+            respuesta = f"✅ Registro añadido correctamente \"{nombre_propio}\"\n\n📅 Fecha: {f_fecha} {f_hora}\n🔄 Tipo: Venta\n🏷️ Categoría: Venta\n📝 Descripción: {datos.get('producto', '')}\n💰 Monto: {simbolo} {datos.get('total', 0):.2f}"
 
         elif intent == "GASTO" and datos.get("monto"):
             await _guardar_transaccion(
@@ -226,7 +238,15 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 descripcion = datos.get("concepto", "gasto"),
                 monto       = datos.get("monto", 0),
                 moneda      = datos.get("moneda", "PEN"),
+                fecha       = datos.get("fecha"),
+                hora        = datos.get("hora"),
             )
+            simbolos = {"PEN": "S/", "USD": "$", "BOB": "Bs."}
+            simbolo = simbolos.get(datos.get("moneda", "PEN"), datos.get("moneda", "PEN"))
+            nombre_propio = negocio.get("nombre_propietario") or negocio.get("nombre_negocio") or "Comerciante"
+            f_fecha = datos.get("fecha") or datetime.date.today().isoformat()
+            f_hora = datos.get("hora") or "12:00:00"
+            respuesta = f"✅ Registro añadido correctamente \"{nombre_propio}\"\n\n📅 Fecha: {f_fecha} {f_hora}\n🔄 Tipo: Gasto\n🏷️ Categoría: {str(datos.get('categoria', 'Otros')).capitalize()}\n📝 Descripción: {datos.get('concepto', '')}\n💰 Monto: {simbolo} {datos.get('monto', 0):.2f}"
 
         elif intent == "REPORTE":
             datos_reporte = await _obtener_reporte(str(negocio["id"]), datos.get("periodo", "hoy"))
@@ -293,18 +313,30 @@ async def _guardar_transaccion(
     descripcion: str,
     monto: float,
     moneda: str = "PEN",
+    fecha: str = None,
+    hora: str = None,
 ) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO transacciones
-                (negocio_id, tipo, descripcion, monto, moneda, fecha, origen_registro)
-            VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, 'whatsapp')
-            """,
-            negocio_id, tipo, descripcion, float(monto), moneda,
-        )
-    logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto}")
+        if fecha and hora:
+            await conn.execute(
+                """
+                INSERT INTO transacciones
+                    (negocio_id, tipo, descripcion, monto, moneda, fecha, hora, origen_registro)
+                VALUES ($1, $2, $3, $4, $5, $6::date, $7::time, 'whatsapp')
+                """,
+                negocio_id, tipo, descripcion, float(monto), moneda, fecha, hora
+            )
+        else:
+            await conn.execute(
+                """
+                INSERT INTO transacciones
+                    (negocio_id, tipo, descripcion, monto, moneda, fecha, origen_registro)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, 'whatsapp')
+                """,
+                negocio_id, tipo, descripcion, float(monto), moneda,
+            )
+    logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto} | {fecha} {hora}")
 
 
 async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:

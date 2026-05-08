@@ -8,6 +8,7 @@ Límites Groq free: 14,400 RPD / 30 RPM
 import json
 import re
 import logging
+import datetime
 from groq import AsyncGroq
 from app.config import settings
 
@@ -57,11 +58,17 @@ EDITAR_TRANSACCION — frases: editar transaccion, cambiar monto de la venta, qu
 datos: {}
 
 VENTA — frases: vendí, vendiste, vendimos, salió una, me llevaron, acabo de vender
-datos: {"producto": str, "cantidad": int, "precio_unitario": float, "total": float, "moneda": "PEN|USD|BOB"}
+datos: {"producto": str, "cantidad": int, "precio_unitario": float, "total": float, "moneda": "PEN|USD|BOB", "fecha": "YYYY-MM-DD", "hora": "HH:MM:SS"}
 Si falta precio o cantidad, pídelos en respuesta.
 
 GASTO — frases: gasté, pagué, compré mercadería, flete, pasajes, alquiler
-datos: {"concepto": str, "monto": float, "moneda": "PEN|USD|BOB", "categoria": "mercaderia|transporte|local|servicios|otros"}
+datos: {"concepto": str, "monto": float, "moneda": "PEN|USD|BOB", "categoria": "mercaderia|transporte|local|servicios|otros", "fecha": "YYYY-MM-DD", "hora": "HH:MM:SS"}
+
+FECHAS Y HORAS:
+Si el usuario especifica fecha (ayer, hace 3 días, etc.), calcúlala basándote en la "Fecha de hoy" provista.
+Si no especifica fecha, usa la "Fecha de hoy".
+Si no especifica hora, pon "12:00:00" por defecto.
+Asegúrate de SIEMPRE devolver "fecha" y "hora" en VENTA y GASTO.
 
 INVENTARIO — frases: tengo, me quedan, llegaron, entró mercadería
 datos: {"producto": str, "cantidad": int}
@@ -125,9 +132,9 @@ class GeminiService:
         contexto_negocio: dict = None,
     ) -> dict:
         contexto_negocio = contexto_negocio or {}
-        mensaje_final = mensaje
+        mensaje_final = f"[Fecha de hoy: {datetime.date.today()}] {mensaje}"
         if contexto_negocio.get("nombre"):
-            mensaje_final = f"[Negocio: {contexto_negocio['nombre']}, ropa: {contexto_negocio.get('tipo_ropa','')}] {mensaje}"
+            mensaje_final = f"[Negocio: {contexto_negocio['nombre']}, ropa: {contexto_negocio.get('tipo_ropa','')} | Fecha de hoy: {datetime.date.today()}] {mensaje}"
 
         try:
             response = await client.chat.completions.create(
