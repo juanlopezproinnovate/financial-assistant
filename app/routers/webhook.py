@@ -202,6 +202,7 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
         contexto = {
             "nombre":    negocio.get("nombre_negocio", ""),
             "tipo_ropa": negocio.get("rubro", ""),
+            "zona_horaria": negocio.get("zona_horaria", "America/Lima"),
         }
         result = await gemini_service.procesar_mensaje(
             mensaje=text,

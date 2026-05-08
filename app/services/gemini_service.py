@@ -131,9 +131,19 @@ class GeminiService:
         contexto_negocio: dict = None,
     ) -> dict:
         contexto_negocio = contexto_negocio or {}
-        mensaje_final = f"[Fecha de hoy: {datetime.date.today()}] {mensaje}"
+        
+        from zoneinfo import ZoneInfo
+        import datetime
+        zona_str = contexto_negocio.get("zona_horaria", "America/Lima")
+        try:
+            tz = ZoneInfo(zona_str)
+        except Exception:
+            tz = ZoneInfo("America/Lima")
+        hoy_local = datetime.datetime.now(tz).date()
+
+        mensaje_final = f"[Fecha de hoy: {hoy_local}] {mensaje}"
         if contexto_negocio.get("nombre"):
-            mensaje_final = f"[Negocio: {contexto_negocio['nombre']}, ropa: {contexto_negocio.get('tipo_ropa','')} | Fecha de hoy: {datetime.date.today()}] {mensaje}"
+            mensaje_final = f"[Negocio: {contexto_negocio['nombre']}, ropa: {contexto_negocio.get('tipo_ropa','')} | Fecha de hoy: {hoy_local}] {mensaje}"
 
         try:
             response = await client.chat.completions.create(
