@@ -1,8 +1,24 @@
 """
 app/services/onboarding_service.py
-Adaptado al schema real del Día 1:
-- negocios: whatsapp_numero, nombre_negocio, estado, onboarding_completo
-- sesiones: negocio_id (FK), estado_conversacion, datos_temporales
+
+Flujo de onboarding completo:
+  onboarding_1  → Bienvenida + capturar nombre del negocio
+  onboarding_2  → Capturar nombre propio del dueño
+  onboarding_3  → Capturar monedas aceptadas (PEN / CLP / ambas)
+  onboarding_4  → Capturar tipo de ropa
+  onboarding_5  → Proponer categorías y permitir ajustes hasta "listo"
+  onboarding_6  → Capturar horario de cierre → completar onboarding
+
+Bugs corregidos:
+  - El estado onboarding_1 ya no repite la bienvenida; avanza con el mensaje recibido.
+  - Gemini extrae solo el dato relevante del mensaje (no guarda texto crudo).
+
+Schema usado:
+  negocios  : whatsapp_numero, nombre_negocio, nombre_propietario, rubro,
+              monedas_aceptadas, horario_cierre, estado, onboarding_completo
+  sesiones  : negocio_id (FK), estado_conversacion, datos_temporales
+  categorias: negocio_id (FK), nombre, tipo, color, activa
+  categorias_plantilla: tipo_ropa, categorias (jsonb array)
 """
 
 import json
@@ -12,15 +28,19 @@ from app.services.gemini_service import gemini_service
 
 logger = logging.getLogger(__name__)
 
+# ──────────────────────────────────────────────────────────────────────────────
+#  Palabras clave que el cliente usa para confirmar que las categorías están ok
+# ──────────────────────────────────────────────────────────────────────────────
+PALABRAS_CONFIRMAR = {"listo", "ok", "bien", "perfecto", "dale", "sí", "si", "ya", "confirmar"}
+
 
 class OnboardingService:
 
     # ──────────────────────────────────────────────
-    #  QUERIES — usan el schema real
+    #  QUERIES — tabla negocios / sesiones
     # ──────────────────────────────────────────────
 
     async def get_negocio(self, telefono: str) -> dict | None:
-        """Busca negocio por whatsapp_numero."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -29,7 +49,6 @@ class OnboardingService:
         return dict(row) if row else None
 
     async def get_sesion(self, telefono: str) -> dict | None:
-        """Obtiene sesión via join con negocios."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -46,7 +65,6 @@ class OnboardingService:
         return dict(row) if row else None
 
     async def upsert_sesion(self, negocio_id: str, estado: str, datos_temp: dict = None) -> None:
-        """Crea o actualiza sesión por negocio_id."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
@@ -65,7 +83,6 @@ class OnboardingService:
             )
 
     async def crear_negocio(self, telefono: str) -> str:
-        """Crea registro inicial del negocio. Retorna el UUID."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -81,7 +98,6 @@ class OnboardingService:
         return str(row["id"])
 
     async def actualizar_negocio(self, negocio_id: str, **campos) -> None:
-        """Actualiza campos del negocio por id."""
         if not campos:
             return
         sets = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(campos))
@@ -106,6 +122,69 @@ class OnboardingService:
             )
 
     # ──────────────────────────────────────────────
+    #  QUERIES — categorias_plantilla (caché IA)
+    # ──────────────────────────────────────────────
+
+    async def buscar_plantilla_categorias(self, tipo_ropa_normalizado: str) -> list[str] | None:
+        """
+        Busca categorías pre-generadas para ese tipo de ropa.
+        Retorna lista de strings o None si no existe.
+        """
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT categorias FROM categorias_plantilla WHERE tipo_ropa = $1",
+                tipo_ropa_normalizado,
+            )
+        if not row:
+            return None
+        raw = row["categorias"]
+        if isinstance(raw, str):
+            return json.loads(raw)
+        return list(raw)
+
+    async def guardar_plantilla_categorias(self, tipo_ropa_normalizado: str, categorias: list[str]) -> None:
+        """
+        Guarda o actualiza plantilla de categorías para este tipo de ropa.
+        Si ya existe, incrementa el contador de uso.
+        """
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO categorias_plantilla (tipo_ropa, categorias, generado_por_ia)
+                VALUES ($1, $2::jsonb, true)
+                ON CONFLICT (tipo_ropa)
+                DO UPDATE SET
+                    veces_usado = categorias_plantilla.veces_usado + 1,
+                    updated_at  = NOW()
+                """,
+                tipo_ropa_normalizado,
+                json.dumps(categorias),
+            )
+
+    async def guardar_categorias_negocio(self, negocio_id: str, categorias: list[str]) -> None:
+        """
+        Inserta las categorías finales del negocio en la tabla `categorias`.
+        Borra las anteriores primero para evitar duplicados.
+        """
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Limpiar categorías anteriores de este negocio (si el onboarding se reinició)
+            await conn.execute(
+                "DELETE FROM categorias WHERE negocio_id = $1", negocio_id
+            )
+            for nombre in categorias:
+                await conn.execute(
+                    """
+                    INSERT INTO categorias (negocio_id, nombre, tipo, activa)
+                    VALUES ($1, $2, 'inventario', true)
+                    """,
+                    negocio_id,
+                    nombre.strip(),
+                )
+
+    # ──────────────────────────────────────────────
     #  HELPERS
     # ──────────────────────────────────────────────
 
@@ -120,6 +199,45 @@ class OnboardingService:
                 return {}
         return raw or {}
 
+    def _normalizar_tipo_ropa(self, texto: str) -> str:
+        """Normaliza el tipo de ropa a minúsculas sin espacios extras."""
+        return texto.strip().lower()
+
+    def _detectar_confirmacion(self, mensaje: str) -> bool:
+        """Retorna True si el mensaje es una confirmación del cliente."""
+        return mensaje.strip().lower() in PALABRAS_CONFIRMAR
+
+    def _formatear_lista_categorias(self, categorias: list[str]) -> str:
+        """Convierte lista a texto numerado para mostrar por WhatsApp."""
+        return "\n".join(f"{i+1}. {c}" for i, c in enumerate(categorias))
+
+    async def _obtener_o_generar_categorias(self, tipo_ropa: str) -> list[str]:
+        """
+        Intenta obtener categorías del caché. Si no existen, las genera con IA
+        y las guarda para futuros negocios con el mismo tipo de ropa.
+        """
+        tipo_normalizado = self._normalizar_tipo_ropa(tipo_ropa)
+
+        # 1. Buscar en caché primero
+        categorias_cached = await self.buscar_plantilla_categorias(tipo_normalizado)
+        if categorias_cached:
+            logger.info(f"[Categorías] Caché hit para tipo_ropa='{tipo_normalizado}'")
+            # Solo incrementar el contador de uso
+            await self.guardar_plantilla_categorias(tipo_normalizado, categorias_cached)
+            return categorias_cached
+
+        # 2. No existe → generar con IA
+        logger.info(f"[Categorías] Caché miss para tipo_ropa='{tipo_normalizado}'. Generando con IA...")
+        result = await gemini_service.generar_categorias_por_tipo_ropa(tipo_ropa=tipo_ropa)
+        categorias_nuevas = result.get("categorias", [
+            "Polos", "Pantalones", "Vestidos", "Accesorios", "Otros"
+        ])
+
+        # 3. Guardar en caché para futuros negocios
+        await self.guardar_plantilla_categorias(tipo_normalizado, categorias_nuevas)
+
+        return categorias_nuevas
+
     # ──────────────────────────────────────────────
     #  FLUJO PRINCIPAL
     # ──────────────────────────────────────────────
@@ -131,12 +249,15 @@ class OnboardingService:
         """
         negocio = await self.get_negocio(telefono)
 
-        # Si no existe, crear registro inicial
+        # ── NEGOCIO NUEVO: crear registro y dar bienvenida ──
         if not negocio:
             negocio_id = await self.crear_negocio(telefono)
             await self.upsert_sesion(negocio_id, "onboarding_1", {})
-            result = await gemini_service.procesar_onboarding(paso=1)
-            return result.get("respuesta", "¡Hola! Soy Boti 👋 ¿Cómo se llama tu negocio?")
+            return (
+                "¡Hola! 👋 Soy *Quri*, tu asistente de negocios para gestionar "
+                "ventas, gastos e inventario por WhatsApp.\n\n"
+                "¿Cuál es el *nombre de tu negocio* de ropa en Tacna?"
+            )
 
         negocio_id = str(negocio["id"])
         sesion = await self.get_sesion(telefono)
@@ -145,39 +266,191 @@ class OnboardingService:
 
         logger.info(f"[Onboarding] {telefono} | estado={estado} | msg='{mensaje}'")
 
-        # ── PASO 1: Bienvenida ──
+        # ══════════════════════════════════════════
+        #  PASO 1 → Capturar nombre del negocio
+        #  FIX: ya NO repite la bienvenida; usa el
+        #  mensaje que llegó como nombre del negocio
+        # ══════════════════════════════════════════
         if estado == "onboarding_1":
-            result = await gemini_service.procesar_onboarding(paso=1)
-            await self.upsert_sesion(negocio_id, "onboarding_2", {})
-            return result.get("respuesta", "¡Hola! Soy Boti 👋 ¿Cómo se llama tu negocio?")
+            nombre_negocio = await gemini_service.extraer_dato(
+                campo="nombre del negocio",
+                mensaje=mensaje,
+            )
+            datos_temp["nombre_negocio"] = nombre_negocio
+            await self.actualizar_negocio(negocio_id, nombre_negocio=nombre_negocio)
+            await self.upsert_sesion(negocio_id, "onboarding_2", datos_temp)
+            return (
+                f"Perfecto, *{nombre_negocio}* quedó registrado. 🎉\n\n"
+                "¿Y cuál es tu *nombre*? (el del dueño o encargado)"
+            )
 
-        # ── PASO 2: Guardar nombre → preguntar tipo de ropa ──
+        # ══════════════════════════════════════════
+        #  PASO 2 → Capturar nombre del propietario
+        # ══════════════════════════════════════════
         elif estado == "onboarding_2":
-            datos_temp["nombre_negocio"] = mensaje.strip().title()
-            await self.actualizar_negocio(negocio_id, nombre_negocio=datos_temp["nombre_negocio"])
-            result = await gemini_service.procesar_onboarding(paso=2, mensaje_usuario=mensaje)
+            nombre_propietario = await gemini_service.extraer_dato(
+                campo="nombre de la persona",
+                mensaje=mensaje,
+            )
+            datos_temp["nombre_propietario"] = nombre_propietario
+            await self.actualizar_negocio(negocio_id, nombre_propietario=nombre_propietario)
             await self.upsert_sesion(negocio_id, "onboarding_3", datos_temp)
-            return result.get("respuesta", "¿Qué tipo de ropa vendes? (dama, caballero, niños, todo)")
+            return (
+                f"Mucho gusto, *{nombre_propietario}* 😊\n\n"
+                "¿Qué *monedas* acepta tu negocio?\n\n"
+                "1️⃣ Solo *Soles* (PEN)\n"
+                "2️⃣ Solo *Pesos chilenos* (CLP)\n"
+                "3️⃣ *Ambas* (Soles y Pesos)"
+            )
 
-        # ── PASO 3: Guardar rubro → preguntar horario ──
+        # ══════════════════════════════════════════
+        #  PASO 3 → Capturar monedas aceptadas
+        # ══════════════════════════════════════════
         elif estado == "onboarding_3":
-            datos_temp["rubro"] = mensaje.strip().lower()
-            await self.actualizar_negocio(negocio_id, rubro=datos_temp["rubro"])
-            result = await gemini_service.procesar_onboarding(paso=3, mensaje_usuario=mensaje)
+            monedas = await gemini_service.extraer_monedas(mensaje=mensaje)
+            # monedas retorna: "PEN", "CLP" o "PEN,CLP"
+            datos_temp["monedas_aceptadas"] = monedas
+            await self.actualizar_negocio(negocio_id, monedas_aceptadas=monedas)
+
+            # Actualizar flags de turistas según monedas
+            atiende_chilenos = "CLP" in monedas
+            await self.actualizar_negocio(
+                negocio_id,
+                atiende_turistas_chilenos=atiende_chilenos,
+            )
+
             await self.upsert_sesion(negocio_id, "onboarding_4", datos_temp)
-            return result.get("respuesta", "¿A qué hora cierras tu tienda? 📊")
 
-        # ── PASO 4: Completar onboarding ──
+            monedas_texto = {
+                "PEN": "solo Soles 🇵🇪",
+                "CLP": "solo Pesos chilenos 🇨🇱",
+                "PEN,CLP": "Soles y Pesos chilenos 🇵🇪🇨🇱",
+            }.get(monedas, monedas)
+
+            return (
+                f"Anotado, aceptas *{monedas_texto}* 💰\n\n"
+                "¿Qué *tipo de ropa* vende tu negocio?\n"
+                "_(Ej: ropa para niños, dama, caballero, ropa deportiva, etc.)_"
+            )
+
+        # ══════════════════════════════════════════
+        #  PASO 4 → Capturar tipo de ropa
+        # ══════════════════════════════════════════
         elif estado == "onboarding_4":
-            datos_temp["horario_cierre"] = mensaje.strip()
-            await self.completar_onboarding(negocio_id)
-            result = await gemini_service.procesar_onboarding(paso=4, mensaje_usuario=mensaje)
-            await self.upsert_sesion(negocio_id, "activo", {})
-            return result.get("respuesta", "¡Todo listo! 🎉 Prueba: 'Vendí 2 polos a S/25 cada uno'")
+            tipo_ropa = await gemini_service.extraer_dato(
+                campo="tipo de ropa o categoría de ropa",
+                mensaje=mensaje,
+            )
+            datos_temp["rubro"] = tipo_ropa
+            await self.actualizar_negocio(negocio_id, rubro=tipo_ropa)
 
+            # Obtener categorías (caché o IA)
+            categorias = await self._obtener_o_generar_categorias(tipo_ropa)
+            datos_temp["categorias_propuestas"] = categorias
+
+            await self.upsert_sesion(negocio_id, "onboarding_5", datos_temp)
+
+            lista = self._formatear_lista_categorias(categorias)
+            return (
+                f"Genial 👗 Para *{tipo_ropa}* te sugiero estas categorías de inventario:\n\n"
+                f"{lista}\n\n"
+                "Puedes:\n"
+                "➕ *Agregar* escribiendo: _agregar Shorts_\n"
+                "➖ *Quitar* escribiendo: _quitar 3_ (el número)\n"
+                "✅ Escribe *listo* cuando estén perfectas"
+            )
+
+        # ══════════════════════════════════════════
+        #  PASO 5 → Ajustar categorías hasta "listo"
+        # ══════════════════════════════════════════
+        elif estado == "onboarding_5":
+            categorias = datos_temp.get("categorias_propuestas", [])
+            msg_lower = mensaje.strip().lower()
+
+            # ── Confirmación ──
+            if self._detectar_confirmacion(msg_lower):
+                await self.guardar_categorias_negocio(negocio_id, categorias)
+                await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
+                return (
+                    "¡Perfecto! 📦 Categorías guardadas.\n\n"
+                    "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
+                    "_(Ej: 8pm, 20:00, 9 de la noche)_"
+                )
+
+            # ── Agregar categoría ──
+            if msg_lower.startswith("agregar "):
+                nueva = mensaje[8:].strip().title()
+                if nueva and nueva not in categorias:
+                    categorias.append(nueva)
+                datos_temp["categorias_propuestas"] = categorias
+                await self.upsert_sesion(negocio_id, "onboarding_5", datos_temp)
+                lista = self._formatear_lista_categorias(categorias)
+                return (
+                    f"✅ *{nueva}* agregada.\n\n"
+                    f"{lista}\n\n"
+                    "Escribe *listo* para confirmar o sigue ajustando."
+                )
+
+            # ── Quitar por número ──
+            if msg_lower.startswith("quitar "):
+                numero_str = mensaje[7:].strip()
+                if numero_str.isdigit():
+                    idx = int(numero_str) - 1
+                    if 0 <= idx < len(categorias):
+                        eliminada = categorias.pop(idx)
+                        datos_temp["categorias_propuestas"] = categorias
+                        await self.upsert_sesion(negocio_id, "onboarding_5", datos_temp)
+                        lista = self._formatear_lista_categorias(categorias)
+                        return (
+                            f"🗑️ *{eliminada}* eliminada.\n\n"
+                            f"{lista}\n\n"
+                            "Escribe *listo* para confirmar o sigue ajustando."
+                        )
+                    else:
+                        return f"⚠️ No existe el número {numero_str}. Elige entre 1 y {len(categorias)}."
+                else:
+                    return "⚠️ Para quitar escribe el *número* de la categoría. Ej: _quitar 2_"
+
+            # ── Mensaje no reconocido ──
+            lista = self._formatear_lista_categorias(categorias)
+            return (
+                f"No entendí bien 😅 Estas son tus categorías actuales:\n\n"
+                f"{lista}\n\n"
+                "Puedes escribir:\n"
+                "➕ _agregar NombreCategoria_\n"
+                "➖ _quitar N_ (el número)\n"
+                "✅ *listo* para confirmar"
+            )
+
+        # ══════════════════════════════════════════
+        #  PASO 6 → Capturar horario de cierre
+        # ══════════════════════════════════════════
+        elif estado == "onboarding_6":
+            horario = await gemini_service.extraer_dato(
+                campo="hora de cierre en formato HH:MM",
+                mensaje=mensaje,
+            )
+            datos_temp["horario_cierre"] = horario
+            await self.actualizar_negocio(negocio_id, horario_cierre=horario)
+            await self.completar_onboarding(negocio_id)
+            await self.upsert_sesion(negocio_id, "activo", {})
+
+            nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
+            nombre_prop = datos_temp.get("nombre_propietario", "")
+            return (
+                f"¡Todo listo, {nombre_prop}! 🎉\n\n"
+                f"*{nombre_negocio}* ya está configurado en Quri.\n\n"
+                "Ahora puedes registrar tus operaciones fácilmente:\n"
+                "📦 _'Vendí 3 polos a S/25 cada uno'_\n"
+                "💸 _'Gasté S/200 en mercadería'_\n"
+                "📊 _'¿Cuánto vendí hoy?'_\n\n"
+                "¡Estoy aquí para ayudarte! 💪"
+            )
+
+        # ── Estado desconocido: reiniciar ──
         else:
             await self.upsert_sesion(negocio_id, "onboarding_1", {})
-            return "¡Hola! Soy Boti. ¿Cómo se llama tu negocio? 😊"
+            return "¡Hola! Soy Quri. ¿Cómo se llama tu negocio? 😊"
 
 
 onboarding_service = OnboardingService()

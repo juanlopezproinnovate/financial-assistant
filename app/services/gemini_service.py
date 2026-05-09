@@ -177,6 +177,159 @@ class GeminiService:
                 "siguiente_paso": "",
             }
 
+    async def extraer_monedas(self, mensaje: str) -> str:
+        """
+        Interpreta la respuesta del usuario sobre qué monedas acepta.
+ 
+        Retorna uno de: "PEN", "CLP", "PEN,CLP"
+        Fallback por palabras clave si el modelo no responde en formato correcto.
+        Fallback final: "PEN"
+        """
+        prompt = (
+            f"El usuario respondió sobre qué monedas acepta en su negocio: \"{mensaje}\"\n\n"
+            f"Clasifica su respuesta y responde ÚNICAMENTE con uno de estos códigos:\n"
+            f"PEN      → solo acepta soles peruanos\n"
+            f"CLP      → solo acepta pesos chilenos\n"
+            f"PEN,CLP  → acepta ambas monedas\n\n"
+            f"Responde solo el código, sin explicaciones."
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Eres un clasificador. Responde SOLO con: PEN, CLP o PEN,CLP",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=16,
+            )
+            resultado = response.choices[0].message.content.strip().upper().replace(" ", "")
+ 
+            # Normalizar si el modelo invirtió el orden
+            if resultado == "CLP,PEN":
+                resultado = "PEN,CLP"
+ 
+            if resultado in ("PEN", "CLP", "PEN,CLP"):
+                logger.info(f"[Groq] extraer_monedas → '{resultado}'")
+                return resultado
+ 
+            # Fallback por palabras clave si el modelo no respetó el formato
+            raise ValueError(f"Formato inesperado: {resultado}")
+ 
+        except Exception as e:
+            logger.warning(f"[Groq] extraer_monedas fallback por error: {e}")
+            msg_lower = mensaje.lower()
+            tiene_pen = any(w in msg_lower for w in ["sol", "soles", "pen", "peruano", "1", "uno", "primero"])
+            tiene_clp = any(w in msg_lower for w in ["peso", "pesos", "clp", "chileno", "2", "dos", "segundo"])
+            tiene_ambas = any(w in msg_lower for w in ["ambas", "los dos", "todo", "3", "tres", "ambos"])
+ 
+            if tiene_ambas or (tiene_pen and tiene_clp):
+                return "PEN,CLP"
+            if tiene_clp:
+                return "CLP"
+            return "PEN"
+
+    async def generar_categorias_por_tipo_ropa(self, tipo_ropa: str) -> dict:
+        """
+        Genera 5 categorías de inventario para el tipo de ropa indicado.
+        Solo se llama cuando no hay caché en la tabla categorias_plantilla.
+ 
+        Retorna: { "categorias": ["Cat1", "Cat2", "Cat3", "Cat4", "Cat5"] }
+        Fallback: categorías genéricas si el modelo falla o responde mal.
+        """
+        prompt = (
+            f"Un comerciante en Tacna, Perú vende: \"{tipo_ropa}\".\n\n"
+            f"Genera exactamente 5 categorías de inventario para ese tipo de negocio.\n"
+            f"Reglas:\n"
+            f"- Nombres cortos (1-3 palabras), en español, con mayúscula inicial.\n"
+            f"- Responde ÚNICAMENTE con un array JSON válido.\n"
+            f"- Sin texto antes ni después, sin bloques de código markdown.\n\n"
+            f"Formato exacto: [\"Cat1\", \"Cat2\", \"Cat3\", \"Cat4\", \"Cat5\"]"
+        )
+        fallback = ["Polos", "Pantalones", "Vestidos", "Accesorios", "Otros"]
+ 
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Eres un asistente que responde SOLO con arrays JSON válidos. "
+                            "Sin texto adicional, sin markdown."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=128,
+            )
+            raw = response.choices[0].message.content.strip()
+ 
+            # Limpiar bloques markdown por si el modelo los agrega igual
+            raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
+ 
+            categorias = json.loads(raw)
+ 
+            if isinstance(categorias, list) and len(categorias) >= 3:
+                categorias = [str(c).strip().title() for c in categorias[:5]]
+                logger.info(f"[Groq] generar_categorias tipo='{tipo_ropa}' → {categorias}")
+                return {"categorias": categorias}
+ 
+            logger.warning(f"[Groq] generar_categorias: lista inválida, usando fallback")
+            return {"categorias": fallback}
+ 
+        except json.JSONDecodeError as e:
+            logger.error(f"[Groq] generar_categorias JSON inválido: {e} | raw: {raw[:100]}")
+            return {"categorias": fallback}
+        except Exception as e:
+            logger.error(f"[Groq] generar_categorias error: {e}")
+            return {"categorias": fallback}
+    
+    async def extraer_dato(self, campo: str, mensaje: str) -> str:
+        """
+        Extrae el valor puro de un campo desde lenguaje natural.
+ 
+        Ejemplo:
+            campo   = "nombre del negocio"
+            mensaje = "El nombre de mi negocio es Ormeño Hermanos"
+            retorna → "Ormeño Hermanos"
+ 
+        Fallback: retorna el mensaje original limpio.
+        """
+        prompt = (
+            f"El usuario escribió: \"{mensaje}\"\n\n"
+            f"Extrae únicamente el valor correspondiente al campo: {campo}.\n"
+            f"Responde SOLO con el valor extraído, sin explicaciones ni puntuación extra.\n"
+            f"Si no puedes identificarlo con claridad, devuelve el texto tal como está, limpio."
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Eres un extractor de datos preciso. "
+                            "Responde SOLO con el valor solicitado, sin texto adicional."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,   # Máxima precisión, sin creatividad
+                max_tokens=64,
+            )
+            resultado = response.choices[0].message.content.strip().strip('"').strip("'")
+            logger.info(f"[Groq] extraer_dato campo='{campo}' → '{resultado}'")
+            return resultado if resultado else mensaje.strip()
+        except Exception as e:
+            logger.error(f"[Groq] extraer_dato error: {e}")
+            return mensaje.strip()
+
+
     async def procesar_onboarding(self, paso: int, mensaje_usuario: str = "") -> dict:
         prompt = ONBOARDING_PROMPTS.get(paso, ONBOARDING_PROMPTS[1])
         if mensaje_usuario:
