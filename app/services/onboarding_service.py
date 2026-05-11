@@ -9,9 +9,10 @@ Flujo de onboarding completo:
   onboarding_5  → Proponer categorías y permitir ajustes hasta "listo"
   onboarding_6  → Capturar horario de cierre → completar onboarding
 
-Bugs corregidos:
-  - El estado onboarding_1 ya no repite la bienvenida; avanza con el mensaje recibido.
-  - Gemini extrae solo el dato relevante del mensaje (no guarda texto crudo).
+Cambios v2:
+  - _leer_historial(): lee los últimos N pares del campo datos_temporales
+  - guardar_en_historial(): persiste el par (user, assistant) en datos_temporales
+    sin pisar otros campos como candidatos_stock, etc.
 
 Schema usado:
   negocios  : whatsapp_numero, nombre_negocio, nombre_propietario, rubro,
@@ -170,7 +171,6 @@ class OnboardingService:
         """
         pool = await get_pool()
         async with pool.acquire() as conn:
-            # Limpiar categorías anteriores de este negocio (si el onboarding se reinició)
             await conn.execute(
                 "DELETE FROM categorias WHERE negocio_id = $1", negocio_id
             )
@@ -185,10 +185,11 @@ class OnboardingService:
                 )
 
     # ──────────────────────────────────────────────
-    #  HELPERS
+    #  HELPERS — datos temporales
     # ──────────────────────────────────────────────
 
-    def _leer_datos_temp(self, sesion: dict) -> dict:
+    def _leer_datos_temp(self, sesion: dict | None) -> dict:
+        """Deserializa datos_temporales de la sesión a dict."""
         if not sesion:
             return {}
         raw = sesion.get("datos_temporales", {})
@@ -198,6 +199,57 @@ class OnboardingService:
             except Exception:
                 return {}
         return raw or {}
+
+    # ──────────────────────────────────────────────
+    #  HELPERS — historial de corto plazo
+    # ──────────────────────────────────────────────
+
+    def _leer_historial(self, sesion: dict | None) -> list[dict]:
+        """
+        Retorna la lista de mensajes anteriores guardados en datos_temporales.
+        Formato: [{"role": "user"|"assistant", "content": str}, ...]
+        """
+        datos = self._leer_datos_temp(sesion)
+        return datos.get("historial_mensajes", [])
+
+    async def guardar_en_historial(
+        self,
+        negocio_id: str,
+        sesion: dict | None,
+        user_msg: str,
+        bot_msg: str,
+        max_turns: int = 3,
+    ) -> None:
+        """
+        Agrega el par (user, assistant) al historial dentro de datos_temporales
+        y recorta a los últimos max_turns turnos (cada turno = 2 mensajes).
+
+        Preserva todos los demás campos de datos_temporales (candidatos_stock,
+        transaccion_id, etc.) — solo toca la clave 'historial_mensajes'.
+        """
+        # Leer datos_temp actuales para no pisar otros campos
+        datos = self._leer_datos_temp(sesion)
+        historial = datos.get("historial_mensajes", [])
+
+        historial.append({"role": "user",      "content": user_msg})
+        historial.append({"role": "assistant",  "content": bot_msg})
+
+        # Mantener solo los últimos max_turns turnos
+        max_mensajes = max_turns * 2
+        if len(historial) > max_mensajes:
+            historial = historial[-max_mensajes:]
+
+        datos["historial_mensajes"] = historial
+
+        # Persistir preservando el estado actual de la sesión
+        estado_actual = (
+            sesion.get("estado_conversacion", "activo") if sesion else "activo"
+        )
+        await self.upsert_sesion(negocio_id, estado_actual, datos)
+
+    # ──────────────────────────────────────────────
+    #  HELPERS — otros
+    # ──────────────────────────────────────────────
 
     def _normalizar_tipo_ropa(self, texto: str) -> str:
         """Normaliza el tipo de ropa a minúsculas sin espacios extras."""
@@ -218,24 +270,19 @@ class OnboardingService:
         """
         tipo_normalizado = self._normalizar_tipo_ropa(tipo_ropa)
 
-        # 1. Buscar en caché primero
         categorias_cached = await self.buscar_plantilla_categorias(tipo_normalizado)
         if categorias_cached:
             logger.info(f"[Categorías] Caché hit para tipo_ropa='{tipo_normalizado}'")
-            # Solo incrementar el contador de uso
             await self.guardar_plantilla_categorias(tipo_normalizado, categorias_cached)
             return categorias_cached
 
-        # 2. No existe → generar con IA
         logger.info(f"[Categorías] Caché miss para tipo_ropa='{tipo_normalizado}'. Generando con IA...")
         result = await gemini_service.generar_categorias_por_tipo_ropa(tipo_ropa=tipo_ropa)
         categorias_nuevas = result.get("categorias", [
             "Polos", "Pantalones", "Vestidos", "Accesorios", "Otros"
         ])
 
-        # 3. Guardar en caché para futuros negocios
         await self.guardar_plantilla_categorias(tipo_normalizado, categorias_nuevas)
-
         return categorias_nuevas
 
     # ──────────────────────────────────────────────
@@ -268,8 +315,6 @@ class OnboardingService:
 
         # ══════════════════════════════════════════
         #  PASO 1 → Capturar nombre del negocio
-        #  FIX: ya NO repite la bienvenida; usa el
-        #  mensaje que llegó como nombre del negocio
         # ══════════════════════════════════════════
         if estado == "onboarding_1":
             nombre_negocio = await gemini_service.extraer_dato(
@@ -308,11 +353,9 @@ class OnboardingService:
         # ══════════════════════════════════════════
         elif estado == "onboarding_3":
             monedas = await gemini_service.extraer_monedas(mensaje=mensaje)
-            # monedas retorna: "PEN", "CLP" o "PEN,CLP"
             datos_temp["monedas_aceptadas"] = monedas
             await self.actualizar_negocio(negocio_id, monedas_aceptadas=monedas)
 
-            # Actualizar flags de turistas según monedas
             atiende_chilenos = "CLP" in monedas
             await self.actualizar_negocio(
                 negocio_id,
@@ -344,7 +387,6 @@ class OnboardingService:
             datos_temp["rubro"] = tipo_ropa
             await self.actualizar_negocio(negocio_id, rubro=tipo_ropa)
 
-            # Obtener categorías (caché o IA)
             categorias = await self._obtener_o_generar_categorias(tipo_ropa)
             datos_temp["categorias_propuestas"] = categorias
 

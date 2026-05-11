@@ -2,6 +2,13 @@
 app/services/gemini_service.py
 Motor NLP migrado a Groq — Llama 3.3 70b
 Mismo nombre de archivo/clase para no cambiar imports en webhook.py
+
+Cambios v2:
+  - procesar_mensaje() ahora recibe y envía el historial real a Groq,
+    dando al modelo memoria de corto plazo de los últimos 3 turnos.
+  - Nuevo intent INCOMPLETO: el modelo lo usa cuando el mensaje es ambiguo
+    y necesita pedir un dato adicional antes de registrar.
+
 Límites Groq free: 14,400 RPD / 30 RPM
 """
 
@@ -37,12 +44,19 @@ Tacna es zona de comercio transfronterizo. Comerciantes compran en Bolivia, Chil
 Manejan ropa de dama, caballero, niños, zapatos, accesorios.
 Monedas: Soles (S/), dólares ($), bolivianos (Bs).
 
+MEMORIA DE CONVERSACIÓN:
+Recibirás el historial de los últimos turnos. Úsalo para entender mensajes cortos o ambiguos.
+Ejemplos:
+- Si antes dijiste "¿qué vendiste?" y ahora el usuario dice "un jean a 40", interpretar como VENTA.
+- Si antes dijiste "¿cuántos?" y el usuario responde "3", usar ese contexto para completar datos.
+- Si el usuario dice solo "1" tras una pregunta sobre cantidad, completar el registro con cantidad=1.
+
 REGLA CRÍTICA DE FORMATO:
 SIEMPRE responde SOLO con JSON válido. Sin texto antes ni después. Sin markdown.
 
 Estructura OBLIGATORIA:
 {
-  "intent": "VENTA|GASTO|INVENTARIO|REPORTE|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|DESCONOCIDO",
+  "intent": "VENTA|GASTO|INVENTARIO|REPORTE|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
   "datos": {},
   "respuesta": "texto para WhatsApp",
   "requiere_confirmacion": false,
@@ -51,6 +65,15 @@ Estructura OBLIGATORIA:
 
 INTENTS:
 
+INCOMPLETO — el mensaje es ambiguo y falta información crítica para registrar algo.
+Úsalo cuando el usuario dice algo como: "anota", "registra", "apunta algo", sin dar detalles.
+NO lo uses si ya hay contexto en el historial que permita inferir los datos.
+datos: {
+  "contexto_parcial": str,    — lo que sí se entendió, ej: "quiere registrar algo"
+  "campo_faltante": str       — qué necesitas: "tipo" | "monto" | "producto" | "cantidad"
+}
+respuesta: pregunta corta y directa para obtener el dato que falta.
+
 ELIMINAR_TRANSACCION — frases: eliminar transaccion, borrar la ultima venta, me equivoque borra eso
 datos: {}
 
@@ -58,19 +81,47 @@ EDITAR_TRANSACCION — frases: editar transaccion, cambiar monto de la venta, qu
 datos: {}
 
 VENTA — frases: vendí, vendiste, vendimos, salió una, me llevaron, acabo de vender
-datos: {"producto": str, "cantidad": int, "precio_unitario": float, "total": float, "moneda": "PEN|USD|BOB", "fecha": "YYYY-MM-DD", "hora": "HH:MM:SS"}
-Si falta precio o cantidad, pídelos en respuesta.
+datos: {
+  "producto": str,             — nombre específico tal como lo dijo el usuario. Ej: "polo azul talla M"
+  "producto_descripcion": str, — detalles adicionales si los menciona (color, talla, modelo).
+  "cantidad": int,
+  "precio_unitario": float,
+  "total": float,
+  "moneda": "PEN|USD|BOB|CLP",
+  "fecha": "YYYY-MM-DD",       — solo si el usuario especificó fecha
+  "hora": "HH:MM:SS"           — solo si el usuario especificó hora
+}
+Si falta precio o cantidad, pídelos en "respuesta". No inventes valores.
+IMPORTANTE: extrae el nombre del producto tan específico como el usuario lo diga.
+"vendí un polo azul talla M" → producto: "polo azul talla M"
+"vendí 3 polos" → producto: "polo" (sin más info disponible)
+Si el historial ya tiene producto y monto, y el usuario responde solo la cantidad, completa el registro.
 
 GASTO — frases: gasté, pagué, compré mercadería, flete, pasajes, alquiler
-datos: {"concepto": str, "monto": float, "moneda": "PEN|USD|BOB", "categoria": "mercaderia|transporte|local|servicios|otros", "fecha": "YYYY-MM-DD", "hora": "HH:MM:SS"}
+datos: {
+  "concepto": str,
+  "monto": float,
+  "moneda": "PEN|USD|BOB|CLP",
+  "categoria": "mercaderia|transporte|local|servicios|otros",
+  "fecha": "YYYY-MM-DD",
+  "hora": "HH:MM:SS"
+}
 
 FECHAS Y HORAS:
 Si el usuario especifica fecha (ayer, hace 3 días, etc.), calcúlala basándote en la "Fecha de hoy" provista y devuelve "fecha".
 Si el usuario especifica hora, devuelve "hora".
 Si NO especifica fecha o hora, simplemente OMITE esos campos en el JSON.
 
-INVENTARIO — frases: tengo, me quedan, llegaron, entró mercadería
-datos: {"producto": str, "cantidad": int}
+INVENTARIO — frases: tengo, me quedan, llegaron, entró mercadería, agregué stock
+datos: {
+  "producto": str,
+  "producto_descripcion": str,
+  "cantidad": int,
+  "tipo": "entrada|ajuste",
+  "precio_costo": float,
+  "precio_venta": float,
+  "moneda": "PEN|USD|BOB|CLP"
+}
 
 REPORTE — frases: cómo voy, cuánto vendí, resumen, total, mis ventas
 datos: {"periodo": "hoy|ayer|semana|mes"}
@@ -82,15 +133,29 @@ MONEDAS:
 S/, soles → "PEN"
 $, dólares → "USD"
 Bs, bolivianos → "BOB"
+Pesos, CLP → "CLP"
 Sin moneda → asumir "PEN"
 
 EJEMPLOS:
-"vendí 3 polos a 25 soles" → VENTA, producto:polo, cantidad:3, precio_unitario:25, total:75, moneda:PEN
+"vendí 3 polos azul talla M a 25 soles" → VENTA, producto:"polo azul talla M", cantidad:3, precio_unitario:25, total:75, moneda:PEN
+"vendí 3 polos a 25 soles" → VENTA, producto:"polo", cantidad:3, precio_unitario:25, total:75, moneda:PEN
 "gasté 200 en pasajes a Bolivia" → GASTO, concepto:pasajes Bolivia, monto:200, moneda:PEN, categoria:transporte
+"llegaron 50 blusas rojas talla S a S/15" → INVENTARIO, tipo:entrada, producto:"blusa roja talla S", cantidad:50, precio_costo:15, moneda:PEN
+"tengo 20 pantalones" → INVENTARIO, tipo:ajuste, producto:"pantalón", cantidad:20
 "cuánto vendí hoy" → REPORTE, periodo:hoy
 "borra esa venta" → ELIMINAR_TRANSACCION
 "quiero modificar el monto" → EDITAR_TRANSACCION
+"anota" → INCOMPLETO, campo_faltante:"tipo"
 "hola" → SALUDO
+
+EJEMPLOS CON HISTORIAL (memoria de corto plazo):
+Historial: user="anota", assistant="¿qué necesitas anotar, una venta o un gasto?"
+Mensaje actual: "40 soles de un jean"
+→ VENTA, producto:"jean", total:40, moneda:PEN — preguntar cantidad si no se especificó.
+
+Historial: user="40 soles de un jean", assistant="Vendiste un jean a S/40. ¿Cuántos jeans vendiste?"
+Mensaje actual: "1"
+→ VENTA, producto:"jean", cantidad:1, precio_unitario:40, total:40, moneda:PEN — registro completo.
 """
 
 ONBOARDING_PROMPTS = {
@@ -118,11 +183,14 @@ class GeminiService:
     def _parsear(self, raw: str) -> dict:
         raw = raw.strip()
         raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
-        # Extraer primer objeto JSON si hay texto extra
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             raw = match.group()
         return json.loads(raw)
+
+    # ──────────────────────────────────────────────
+    #  CORE: procesar mensaje principal
+    # ──────────────────────────────────────────────
 
     async def procesar_mensaje(
         self,
@@ -130,10 +198,17 @@ class GeminiService:
         historial: list[dict] = None,
         contexto_negocio: dict = None,
     ) -> dict:
+        """
+        Procesa el mensaje del comerciante usando el historial de corto plazo.
+
+        historial: lista de dicts [{role: "user"|"assistant", content: str}, ...]
+                   con los últimos N turnos. Se inserta entre el system prompt
+                   y el mensaje actual para dar contexto al modelo.
+        """
         contexto_negocio = contexto_negocio or {}
-        
+        historial = historial or []
+
         from zoneinfo import ZoneInfo
-        import datetime
         zona_str = contexto_negocio.get("zona_horaria", "America/Lima")
         try:
             tz = ZoneInfo(zona_str)
@@ -143,15 +218,22 @@ class GeminiService:
 
         mensaje_final = f"[Fecha de hoy: {hoy_local}] {mensaje}"
         if contexto_negocio.get("nombre"):
-            mensaje_final = f"[Negocio: {contexto_negocio['nombre']}, ropa: {contexto_negocio.get('tipo_ropa','')} | Fecha de hoy: {hoy_local}] {mensaje}"
+            mensaje_final = (
+                f"[Negocio: {contexto_negocio['nombre']}, "
+                f"ropa: {contexto_negocio.get('tipo_ropa', '')} | "
+                f"Fecha de hoy: {hoy_local}] {mensaje}"
+            )
+
+        # Construir el array de messages:
+        # system → historial de turnos anteriores → mensaje actual
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(historial)
+        messages.append({"role": "user", "content": mensaje_final})
 
         try:
             response = await client.chat.completions.create(
                 model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": mensaje_final},
-                ],
+                messages=messages,
                 temperature=0.2,
                 max_tokens=512,
             )
@@ -177,21 +259,52 @@ class GeminiService:
                 "siguiente_paso": "",
             }
 
-    async def extraer_monedas(self, mensaje: str) -> str:
+    # ──────────────────────────────────────────────
+    #  STOCK: resolver producto para descuento
+    # ──────────────────────────────────────────────
+
+    async def resolver_producto_venta(
+        self,
+        nombre_extraido: str,
+        candidatos: list[dict],
+    ) -> dict:
         """
-        Interpreta la respuesta del usuario sobre qué monedas acepta.
- 
-        Retorna uno de: "PEN", "CLP", "PEN,CLP"
-        Fallback por palabras clave si el modelo no responde en formato correcto.
-        Fallback final: "PEN"
+        Dado el nombre que el NLP extrajo y una lista de candidatos
+        de la BD (ya filtrados por pg_trgm), decide cuál es el match.
+
+        candidatos: lista de dicts con {id, nombre, nombre_variantes, similitud}
+        ordenados por similitud DESC.
+
+        Retorna:
+        {
+          "match": "exacto" | "parcial" | "ninguno",
+          "producto_id": uuid | None,
+          "candidatos_ids": [uuid, ...],
+        }
         """
+        if not candidatos:
+            return {"match": "ninguno", "producto_id": None, "candidatos_ids": []}
+
+        if len(candidatos) == 1 and candidatos[0].get("similitud", 0) >= 0.6:
+            return {
+                "match": "exacto",
+                "producto_id": candidatos[0]["id"],
+                "candidatos_ids": [],
+            }
+
+        lista_txt = "\n".join(
+            f'{i+1}. "{c["nombre"]}"' for i, c in enumerate(candidatos)
+        )
         prompt = (
-            f"El usuario respondió sobre qué monedas acepta en su negocio: \"{mensaje}\"\n\n"
-            f"Clasifica su respuesta y responde ÚNICAMENTE con uno de estos códigos:\n"
-            f"PEN      → solo acepta soles peruanos\n"
-            f"CLP      → solo acepta pesos chilenos\n"
-            f"PEN,CLP  → acepta ambas monedas\n\n"
-            f"Responde solo el código, sin explicaciones."
+            f'El comerciante dijo que vendió: "{nombre_extraido}"\n\n'
+            f"Estos son los productos registrados en su catálogo:\n{lista_txt}\n\n"
+            f"¿Alguno de estos productos es claramente el mismo que mencionó el comerciante?\n"
+            f"Responde SOLO con JSON:\n"
+            f'{{"match": "exacto"|"parcial"|"ninguno", "indice": 1..N|null}}\n'
+            f"- exacto: hay UNO que claramente es el mismo producto.\n"
+            f"- parcial: hay varios que podrían serlo, no se puede decidir solo.\n"
+            f"- ninguno: ninguno coincide con lo que dijo el comerciante.\n"
+            f"indice: número del producto si match=exacto, null en cualquier otro caso."
         )
         try:
             response = await client.chat.completions.create(
@@ -199,136 +312,77 @@ class GeminiService:
                 messages=[
                     {
                         "role": "system",
-                        "content": "Eres un clasificador. Responde SOLO con: PEN, CLP o PEN,CLP",
+                        "content": "Eres un clasificador de productos. Responde SOLO con JSON válido.",
                     },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.0,
-                max_tokens=16,
-            )
-            resultado = response.choices[0].message.content.strip().upper().replace(" ", "")
- 
-            # Normalizar si el modelo invirtió el orden
-            if resultado == "CLP,PEN":
-                resultado = "PEN,CLP"
- 
-            if resultado in ("PEN", "CLP", "PEN,CLP"):
-                logger.info(f"[Groq] extraer_monedas → '{resultado}'")
-                return resultado
- 
-            # Fallback por palabras clave si el modelo no respetó el formato
-            raise ValueError(f"Formato inesperado: {resultado}")
- 
-        except Exception as e:
-            logger.warning(f"[Groq] extraer_monedas fallback por error: {e}")
-            msg_lower = mensaje.lower()
-            tiene_pen = any(w in msg_lower for w in ["sol", "soles", "pen", "peruano", "1", "uno", "primero"])
-            tiene_clp = any(w in msg_lower for w in ["peso", "pesos", "clp", "chileno", "2", "dos", "segundo"])
-            tiene_ambas = any(w in msg_lower for w in ["ambas", "los dos", "todo", "3", "tres", "ambos"])
- 
-            if tiene_ambas or (tiene_pen and tiene_clp):
-                return "PEN,CLP"
-            if tiene_clp:
-                return "CLP"
-            return "PEN"
-
-    async def generar_categorias_por_tipo_ropa(self, tipo_ropa: str) -> dict:
-        """
-        Genera 5 categorías de inventario para el tipo de ropa indicado.
-        Solo se llama cuando no hay caché en la tabla categorias_plantilla.
- 
-        Retorna: { "categorias": ["Cat1", "Cat2", "Cat3", "Cat4", "Cat5"] }
-        Fallback: categorías genéricas si el modelo falla o responde mal.
-        """
-        prompt = (
-            f"Un comerciante en Tacna, Perú vende: \"{tipo_ropa}\".\n\n"
-            f"Genera exactamente 5 categorías de inventario para ese tipo de negocio.\n"
-            f"Reglas:\n"
-            f"- Nombres cortos (1-3 palabras), en español, con mayúscula inicial.\n"
-            f"- Responde ÚNICAMENTE con un array JSON válido.\n"
-            f"- Sin texto antes ni después, sin bloques de código markdown.\n\n"
-            f"Formato exacto: [\"Cat1\", \"Cat2\", \"Cat3\", \"Cat4\", \"Cat5\"]"
-        )
-        fallback = ["Polos", "Pantalones", "Vestidos", "Accesorios", "Otros"]
- 
-        try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Eres un asistente que responde SOLO con arrays JSON válidos. "
-                            "Sin texto adicional, sin markdown."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.3,
-                max_tokens=128,
-            )
-            raw = response.choices[0].message.content.strip()
- 
-            # Limpiar bloques markdown por si el modelo los agrega igual
-            raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
- 
-            categorias = json.loads(raw)
- 
-            if isinstance(categorias, list) and len(categorias) >= 3:
-                categorias = [str(c).strip().title() for c in categorias[:5]]
-                logger.info(f"[Groq] generar_categorias tipo='{tipo_ropa}' → {categorias}")
-                return {"categorias": categorias}
- 
-            logger.warning(f"[Groq] generar_categorias: lista inválida, usando fallback")
-            return {"categorias": fallback}
- 
-        except json.JSONDecodeError as e:
-            logger.error(f"[Groq] generar_categorias JSON inválido: {e} | raw: {raw[:100]}")
-            return {"categorias": fallback}
-        except Exception as e:
-            logger.error(f"[Groq] generar_categorias error: {e}")
-            return {"categorias": fallback}
-    
-    async def extraer_dato(self, campo: str, mensaje: str) -> str:
-        """
-        Extrae el valor puro de un campo desde lenguaje natural.
- 
-        Ejemplo:
-            campo   = "nombre del negocio"
-            mensaje = "El nombre de mi negocio es Ormeño Hermanos"
-            retorna → "Ormeño Hermanos"
- 
-        Fallback: retorna el mensaje original limpio.
-        """
-        prompt = (
-            f"El usuario escribió: \"{mensaje}\"\n\n"
-            f"Extrae únicamente el valor correspondiente al campo: {campo}.\n"
-            f"Responde SOLO con el valor extraído, sin explicaciones ni puntuación extra.\n"
-            f"Si no puedes identificarlo con claridad, devuelve el texto tal como está, limpio."
-        )
-        try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Eres un extractor de datos preciso. "
-                            "Responde SOLO con el valor solicitado, sin texto adicional."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,   # Máxima precisión, sin creatividad
                 max_tokens=64,
             )
-            resultado = response.choices[0].message.content.strip().strip('"').strip("'")
-            logger.info(f"[Groq] extraer_dato campo='{campo}' → '{resultado}'")
-            return resultado if resultado else mensaje.strip()
-        except Exception as e:
-            logger.error(f"[Groq] extraer_dato error: {e}")
-            return mensaje.strip()
+            resultado = self._parsear(response.choices[0].message.content)
+            match_tipo = resultado.get("match", "ninguno")
+            indice = resultado.get("indice")
 
+            if match_tipo == "exacto" and indice and 1 <= indice <= len(candidatos):
+                return {
+                    "match": "exacto",
+                    "producto_id": candidatos[indice - 1]["id"],
+                    "candidatos_ids": [],
+                }
+            elif match_tipo == "parcial":
+                return {
+                    "match": "parcial",
+                    "producto_id": None,
+                    "candidatos_ids": [c["id"] for c in candidatos],
+                }
+            else:
+                return {"match": "ninguno", "producto_id": None, "candidatos_ids": []}
+
+        except Exception as e:
+            logger.error(f"[Groq] resolver_producto_venta error: {e}")
+            if candidatos:
+                return {
+                    "match": "parcial",
+                    "producto_id": None,
+                    "candidatos_ids": [c["id"] for c in candidatos],
+                }
+            return {"match": "ninguno", "producto_id": None, "candidatos_ids": []}
+
+    async def confirmar_producto_nuevo(
+        self,
+        nombre: str,
+        precio: float | None,
+        cantidad: int,
+    ) -> str:
+        """
+        Genera el mensaje de confirmación para crear un producto nuevo
+        que no estaba en el catálogo.
+        """
+        precio_txt = f" con precio S/{precio:.2f}" if precio else ""
+        prompt = (
+            f'Genera un mensaje corto de WhatsApp (máximo 2 líneas) para preguntarle '
+            f'al comerciante si quiere agregar "{nombre}"{precio_txt} a su catálogo, '
+            f"dado que acaba de vender {cantidad} unidad(es) y no estaba registrado. "
+            f"Habla en español peruano cálido. Termina con (sí/no). Sin markdown."
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=80,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception:
+            precio_str = f" a S/{precio:.2f}" if precio else ""
+            return (
+                f'No tengo "{nombre}" en tu catálogo. '
+                f"¿Lo agrego{precio_str}? (sí/no)"
+            )
+
+    # ──────────────────────────────────────────────
+    #  ONBOARDING
+    # ──────────────────────────────────────────────
 
     async def procesar_onboarding(self, paso: int, mensaje_usuario: str = "") -> dict:
         prompt = ONBOARDING_PROMPTS.get(paso, ONBOARDING_PROMPTS[1])
@@ -339,8 +393,15 @@ class GeminiService:
             response = await client.chat.completions.create(
                 model=MODELO_NLP,
                 messages=[
-                    {"role": "system", "content": "Eres Boti, asistente de negocios por WhatsApp para comerciantes de ropa en Tacna, Perú. Habla en español peruano cálido y natural."},
-                    {"role": "user",   "content": prompt},
+                    {
+                        "role": "system",
+                        "content": (
+                            "Eres Boti, asistente de negocios por WhatsApp para "
+                            "comerciantes de ropa en Tacna, Perú. "
+                            "Habla en español peruano cálido y natural."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
                 max_tokens=256,
@@ -363,6 +424,10 @@ class GeminiService:
                 "requiere_confirmacion": False,
                 "siguiente_paso": "",
             }
+
+    # ──────────────────────────────────────────────
+    #  REPORTES
+    # ──────────────────────────────────────────────
 
     async def generar_resumen_reporte(self, datos: dict) -> str:
         prompt = f"""Eres Boti. Genera un resumen de reporte para WhatsApp con estos datos:
@@ -395,6 +460,10 @@ Solo responde el texto, sin JSON."""
                 f"✅ Ganancia: S/{tv - tg:.2f}"
             )
 
+    # ──────────────────────────────────────────────
+    #  EDICIÓN DE TRANSACCIONES
+    # ──────────────────────────────────────────────
+
     async def interpretar_edicion(self, transaccion: dict, mensaje: str) -> dict:
         prompt = f"""Eres Boti. Un usuario quiere editar una transacción existente.
 Transacción actual:
@@ -402,7 +471,7 @@ Transacción actual:
 
 El usuario ha dicho: "{mensaje}"
 
-Devuelve SOLO un JSON con los campos de la transacción que deben actualizarse. 
+Devuelve SOLO un JSON con los campos de la transacción que deben actualizarse.
 Posibles campos: "descripcion", "monto", "moneda", "tipo".
 Ejemplo: si dice "cambia el monto a 50", devuelve {{"monto": 50}}.
 Si dice "era en dolares", devuelve {{"moneda": "USD"}}.
@@ -421,6 +490,123 @@ No incluyas texto adicional ni markdown."""
         except Exception as e:
             logger.error(f"[Groq] Error interpretando edición: {e}")
             return {}
+
+    # ──────────────────────────────────────────────
+    #  ONBOARDING: extractores de datos
+    # ──────────────────────────────────────────────
+
+    async def extraer_dato(self, campo: str, mensaje: str) -> str:
+        prompt = (
+            f'El usuario escribió: "{mensaje}"\n\n'
+            f"Extrae únicamente el valor correspondiente al campo: {campo}.\n"
+            f"Responde SOLO con el valor extraído, sin explicaciones ni puntuación extra.\n"
+            f"Si no puedes identificarlo con claridad, devuelve el texto tal como está, limpio."
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Eres un extractor de datos preciso. "
+                            "Responde SOLO con el valor solicitado, sin texto adicional."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=64,
+            )
+            resultado = response.choices[0].message.content.strip().strip('"').strip("'")
+            logger.info(f"[Groq] extraer_dato campo='{campo}' → '{resultado}'")
+            return resultado if resultado else mensaje.strip()
+        except Exception as e:
+            logger.error(f"[Groq] extraer_dato error: {e}")
+            return mensaje.strip()
+
+    async def extraer_monedas(self, mensaje: str) -> str:
+        prompt = (
+            f'El usuario respondió sobre qué monedas acepta en su negocio: "{mensaje}"\n\n'
+            f"Clasifica su respuesta y responde ÚNICAMENTE con uno de estos códigos:\n"
+            f"PEN      → solo acepta soles peruanos\n"
+            f"CLP      → solo acepta pesos chilenos\n"
+            f"PEN,CLP  → acepta ambas monedas\n\n"
+            f"Responde solo el código, sin explicaciones."
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Eres un clasificador. Responde SOLO con: PEN, CLP o PEN,CLP",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=16,
+            )
+            resultado = response.choices[0].message.content.strip().upper().replace(" ", "")
+            if resultado == "CLP,PEN":
+                resultado = "PEN,CLP"
+            if resultado in ("PEN", "CLP", "PEN,CLP"):
+                logger.info(f"[Groq] extraer_monedas → '{resultado}'")
+                return resultado
+            raise ValueError(f"Formato inesperado: {resultado}")
+        except Exception as e:
+            logger.warning(f"[Groq] extraer_monedas fallback por error: {e}")
+            msg_lower = mensaje.lower()
+            tiene_pen   = any(w in msg_lower for w in ["sol", "soles", "pen", "peruano", "1", "uno", "primero"])
+            tiene_clp   = any(w in msg_lower for w in ["peso", "pesos", "clp", "chileno", "2", "dos", "segundo"])
+            tiene_ambas = any(w in msg_lower for w in ["ambas", "los dos", "todo", "3", "tres", "ambos"])
+            if tiene_ambas or (tiene_pen and tiene_clp):
+                return "PEN,CLP"
+            if tiene_clp:
+                return "CLP"
+            return "PEN"
+
+    async def generar_categorias_por_tipo_ropa(self, tipo_ropa: str) -> dict:
+        prompt = (
+            f'Un comerciante en Tacna, Perú vende: "{tipo_ropa}".\n\n'
+            f"Genera exactamente 5 categorías de inventario para ese tipo de negocio.\n"
+            f"Reglas:\n"
+            f"- Nombres cortos (1-3 palabras), en español, con mayúscula inicial.\n"
+            f"- Responde ÚNICAMENTE con un array JSON válido.\n"
+            f"- Sin texto antes ni después, sin bloques de código markdown.\n\n"
+            f'Formato exacto: ["Cat1", "Cat2", "Cat3", "Cat4", "Cat5"]'
+        )
+        fallback = ["Polos", "Pantalones", "Vestidos", "Accesorios", "Otros"]
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Eres un asistente que responde SOLO con arrays JSON válidos. "
+                            "Sin texto adicional, sin markdown."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=128,
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
+            categorias = json.loads(raw)
+            if isinstance(categorias, list) and len(categorias) >= 3:
+                categorias = [str(c).strip().title() for c in categorias[:5]]
+                logger.info(f"[Groq] generar_categorias tipo='{tipo_ropa}' → {categorias}")
+                return {"categorias": categorias}
+            return {"categorias": fallback}
+        except json.JSONDecodeError as e:
+            logger.error(f"[Groq] generar_categorias JSON inválido: {e}")
+            return {"categorias": fallback}
+        except Exception as e:
+            logger.error(f"[Groq] generar_categorias error: {e}")
+            return {"categorias": fallback}
 
 
 gemini_service = GeminiService()
