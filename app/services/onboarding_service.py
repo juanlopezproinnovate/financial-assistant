@@ -263,27 +263,93 @@ class OnboardingService:
         """Convierte lista a texto numerado para mostrar por WhatsApp."""
         return "\n".join(f"{i+1}. {c}" for i, c in enumerate(categorias))
 
+    def _filtrar_categorias_validas(self, categorias: list[str]) -> list[str]:
+        """
+        Permite SOLO prendas superiores e inferiores.
+        Excluye calzado, accesorios, etc.
+        """
+
+        permitidas = {
+            # ───────── SUPERIORES ─────────
+            "polo", "polos", "camiseta", "camisetas", "camisa", "camisas",
+            "blusa", "blusas", "top", "tops", "crop top", "croptop",
+            "casaca", "casacas", "chaqueta", "chaquetas", "abrigo", "abrigos",
+            "chompa", "chompas", "suéter", "sueter", "suéteres", "sueteres",
+            "polera", "poleras", "hoodie", "hoodies",
+            "cardigan", "cárdigan", "cardigans", "cárdigans",
+            "chaleco", "chalecos",
+            "blazer", "blazers",
+            "camisilla", "camisillas", "bvd", "bividi",
+            "jersey", "jerseys",
+            "poncho", "ponchos",
+            "casaca jean", "casacas jean", "chaqueta jean",
+
+            # ───────── INFERIORES ─────────
+            "pantalon", "pantalones", "pantalón", "pantalones",
+            "jean", "jeans", "vaquero", "vaqueros",
+            "short", "shorts", "bermuda", "bermudas",
+            "falda", "faldas", "minifalda", "minifaldas",
+            "maxifalda", "maxifaldas",
+            "leggins", "legging", "leggings",
+            "buzo", "buzos", "jogger", "joggers",
+            "pantalon deportivo", "pantalones deportivos",
+            "pantalon jogger", "pantalones jogger",
+            "licra", "licras", "malla", "mallas",
+            "palazzo", "palazzos",
+            "culotte", "culottes",
+            "capri", "capris",
+            "overol", "overoles", "enterizo", "enterizos",
+        }
+
+        categorias_validas = []
+
+        for c in categorias:
+            c_norm = c.strip().lower()
+
+            # match directo
+            if c_norm in permitidas:
+                categorias_validas.append(c.strip())
+                continue
+
+            # match parcial (clave 🔥 para cosas como "pantalon cargo", "polo oversize")
+            for p in permitidas:
+                if p in c_norm:
+                    categorias_validas.append(c.strip())
+                    break
+
+        # eliminar duplicados manteniendo orden
+        categorias_validas = list(dict.fromkeys(categorias_validas))
+
+        # fallback si todo fue filtrado
+        if not categorias_validas:
+            return ["Polos", "Pantalones", "Shorts", "Blusas"]
+
+        return categorias_validas
+
     async def _obtener_o_generar_categorias(self, tipo_ropa: str) -> list[str]:
-        """
-        Intenta obtener categorías del caché. Si no existen, las genera con IA
-        y las guarda para futuros negocios con el mismo tipo de ropa.
-        """
         tipo_normalizado = self._normalizar_tipo_ropa(tipo_ropa)
 
         categorias_cached = await self.buscar_plantilla_categorias(tipo_normalizado)
         if categorias_cached:
             logger.info(f"[Categorías] Caché hit para tipo_ropa='{tipo_normalizado}'")
-            await self.guardar_plantilla_categorias(tipo_normalizado, categorias_cached)
-            return categorias_cached
+            categorias_filtradas = self._filtrar_categorias_validas(categorias_cached)
+            await self.guardar_plantilla_categorias(tipo_normalizado, categorias_filtradas)
+            return categorias_filtradas
 
         logger.info(f"[Categorías] Caché miss para tipo_ropa='{tipo_normalizado}'. Generando con IA...")
-        result = await gemini_service.generar_categorias_por_tipo_ropa(tipo_ropa=tipo_ropa)
+
+        result = await gemini_service.generar_categorias_por_tipo_ropa(
+            tipo_ropa=f"{tipo_ropa}. SOLO incluir prendas superiores e inferiores. NO incluir calzado ni accesorios."
+        )
+
         categorias_nuevas = result.get("categorias", [
-            "Polos", "Pantalones", "Vestidos", "Accesorios", "Otros"
+            "Polos", "Pantalones", "Blusas", "Shorts"
         ])
 
-        await self.guardar_plantilla_categorias(tipo_normalizado, categorias_nuevas)
-        return categorias_nuevas
+        categorias_filtradas = self._filtrar_categorias_validas(categorias_nuevas)
+
+        await self.guardar_plantilla_categorias(tipo_normalizado, categorias_filtradas)
+        return categorias_filtradas
 
     # ──────────────────────────────────────────────
     #  FLUJO PRINCIPAL
