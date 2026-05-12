@@ -340,7 +340,7 @@ class OnboardingService:
 
         return resultado
 
-    def _json_serial(obj):
+    def _json_serial(self, obj):
         if isinstance(obj, (datetime, date)):
             return obj.isoformat()
         if isinstance(obj, uuid.UUID):
