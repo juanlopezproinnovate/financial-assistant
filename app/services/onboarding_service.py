@@ -48,6 +48,7 @@ PALABRAS_CONFIRMAR = {"listo", "ok", "bien", "perfecto", "dale", "sí", "si", "y
 #  Sub-pasos dentro de onboarding_5c (carga de inventario)
 # ──────────────────────────────────────────────────────────────────────────────
 SUB_PASO_NOMBRE    = "nombre"
+SUB_PASO_COMPLETO  = "completo"
 SUB_PASO_TALLA     = "talla"
 SUB_PASO_PRECIO    = "precio"
 SUB_PASO_STOCK     = "stock"
@@ -290,6 +291,71 @@ class OnboardingService:
         return raw or {}
 
     # ──────────────────────────────────────────────
+    #  HELPERS — parseo de formulario completo
+    # ──────────────────────────────────────────────
+    def _parsear_formulario_producto(self, texto: str) -> dict:
+        """
+        Intenta extraer nombre, talla, precio, stock y etiqueta
+        de un mensaje en formato libre o con etiquetas explícitas.
+        Retorna un dict con los campos encontrados (puede estar incompleto).
+        """
+        import re
+
+        resultado = {}
+        lineas = [l.strip() for l in texto.strip().splitlines() if l.strip()]
+
+        # Mapeo de etiquetas posibles → campo interno
+        patrones = {
+            "nombre":   r"(?:nombre|producto)\s*[:\-]\s*(.+)",
+            "talla":    r"talla\s*[:\-]\s*(.+)",
+            "precio":   r"precio\s*[:\-]\s*(.+)",
+            "stock":    r"(?:stock|cantidad|unidades?)\s*[:\-]\s*(.+)",
+            "etiqueta": r"etiqueta\s*[:\-]\s*(.+)",
+        }
+
+        for linea in lineas:
+            linea_lower = linea.lower()
+            for campo, patron in patrones.items():
+                if campo in resultado:
+                    continue
+                m = re.search(patron, linea_lower)
+                if m:
+                    valor_raw = linea[m.start(1):m.start(1) + len(m.group(1))].strip()
+                    resultado[campo] = valor_raw
+
+        # Post-procesado de tipos
+        if "precio" in resultado:
+            precio = self._parsear_precio(resultado["precio"])
+            resultado["precio"] = precio  # None si no se pudo parsear
+        if "stock" in resultado:
+            cantidad = self._parsear_cantidad(resultado["stock"])
+            resultado["stock"] = cantidad  # None si no se pudo parsear
+        if "etiqueta" in resultado:
+            if self._es_omision(resultado["etiqueta"]):
+                resultado["etiqueta"] = None
+
+        return resultado
+
+    def _mensaje_plantilla_producto(self, num_producto: int = 1) -> str:
+        """
+        Devuelve el mensaje con la plantilla de carga de producto,
+        amigable para personas mayores.
+        """
+        es_primero = num_producto == 1
+        intro = "¡Genial! Vamos a cargar tu inventario 📦" if es_primero else "¡Perfecto! Siguiente producto 📦"
+        return (
+            f"{intro}\n\n"
+            "Escríbeme los datos así, en líneas separadas:\n\n"
+            "📝 *Nombre:* Polo básico\n"
+            "📐 *Talla:* M\n"
+            "💰 *Precio:* 35\n"
+            "📦 *Stock:* 10\n"
+            "🏷️ *Etiqueta:* verano24 _(opcional, escribe «no» si no quieres)_\n\n"
+            "Puedes copiar ese formato y reemplazar los valores. "
+            "Si algo te falta saber, también puedes escribir solo lo que tengas y te ayudo con lo demás 😊"
+        )
+
+    # ──────────────────────────────────────────────
     #  HELPERS — historial de corto plazo
     # ──────────────────────────────────────────────
 
@@ -325,6 +391,53 @@ class OnboardingService:
     # ──────────────────────────────────────────────
     #  HELPERS — otros
     # ──────────────────────────────────────────────
+
+    async def _guardar_y_confirmar_producto(
+        self,
+        negocio_id: str,
+        datos_temp: dict,
+        producto_actual: dict,
+        etiqueta: str | None,
+        productos_count: int,
+    ) -> str:
+        """Inserta el producto en BD, actualiza contadores y devuelve mensaje de confirmación."""
+        try:
+            await self.insertar_producto_con_stock(
+                negocio_id   = negocio_id,
+                nombre       = producto_actual["nombre"],
+                talla        = producto_actual["talla"],
+                precio_venta = producto_actual["precio_venta"],
+                cantidad     = producto_actual["cantidad"],
+                etiqueta     = etiqueta,
+            )
+            productos_count += 1
+            datos_temp["inv_productos_cargados"] = productos_count
+        except Exception as e:
+            logger.error(f"[Onboarding] Error al guardar producto: {e}")
+            return (
+                "⚠️ Hubo un problema al guardar el producto. "
+                "Por favor escribe el nombre nuevamente para intentar de nuevo."
+            )
+
+        etiqueta_txt = f" · _{etiqueta}_" if etiqueta else ""
+        resumen = (
+            f"✅ *{producto_actual['nombre']}* guardado\n"
+            f"   Talla: {producto_actual['talla']} · "
+            f"S/ {producto_actual['precio_venta']:.2f} · "
+            f"{producto_actual['cantidad']} uds{etiqueta_txt}\n\n"
+        )
+
+        datos_temp["inv_producto_actual"] = {}
+        datos_temp["inv_sub_paso"] = SUB_PASO_CONTINUAR
+        await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+
+        return (
+            resumen +
+            f"Llevas *{productos_count}* producto(s) cargado(s) 🎉\n\n"
+            "¿Qué hacemos?\n"
+            "➕ Escribe *otro* para agregar más\n"
+            "✅ Escribe *listo* para continuar"
+        )
 
     def _normalizar_tipo_ropa(self, texto: str) -> str:
         return texto.strip().lower()
@@ -671,50 +784,180 @@ class OnboardingService:
             productos_count  = datos_temp.get("inv_productos_cargados", 0)
             msg_lower        = mensaje.strip().lower()
 
-            # ── Sub-paso: nombre ──
+            # ── Sub-paso: mostrar plantilla y esperar datos completos ──
             if sub_paso == SUB_PASO_NOMBRE:
-                nombre_producto = mensaje.strip().title()
-                producto_actual["nombre"] = nombre_producto
-                datos_temp["inv_producto_actual"] = producto_actual
-                datos_temp["inv_sub_paso"] = SUB_PASO_TALLA
+                num = productos_count + 1
+                datos_temp["inv_sub_paso"]        = SUB_PASO_COMPLETO
+                datos_temp["inv_producto_actual"] = {}
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return (
-                    f"📝 *{nombre_producto}*\n\n"
-                    "¿Qué *talla* tiene este producto?\n"
-                    "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
+                return self._mensaje_plantilla_producto(num)
+
+            # ── Sub-paso: parsear respuesta del formulario completo ──
+            elif sub_paso == SUB_PASO_COMPLETO:
+                campos = self._parsear_formulario_producto(mensaje)
+
+                # Guardar lo que llegó en producto_actual
+                if "nombre" in campos and campos["nombre"]:
+                    producto_actual["nombre"] = campos["nombre"].title()
+                if "talla" in campos and campos["talla"]:
+                    producto_actual["talla"] = campos["talla"].upper()
+                if "precio" in campos and campos["precio"]:
+                    producto_actual["precio_venta"] = campos["precio"]
+                if "stock" in campos and campos["stock"] is not None:
+                    producto_actual["cantidad"] = campos["stock"]
+                # etiqueta puede ser None explícito (omisión)
+                if "etiqueta" in campos:
+                    producto_actual["etiqueta"] = campos["etiqueta"]
+
+                datos_temp["inv_producto_actual"] = producto_actual
+
+                # ── Determinar qué falta y pedir solo eso ──
+                if not producto_actual.get("nombre"):
+                    datos_temp["inv_sub_paso"] = SUB_PASO_TALLA  # usamos talla como proxy para re-pedir nombre
+                    datos_temp["inv_sub_paso"] = "nombre_faltante"
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        "Casi listo 😊 Solo me falta saber:\n\n"
+                        "📝 ¿Cómo se llama el producto?\n"
+                        "_(Ej: Polo básico, Jean slim, Blusa floral)_"
+                    )
+
+                if not producto_actual.get("talla"):
+                    datos_temp["inv_sub_paso"] = SUB_PASO_TALLA
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"Bien, *{producto_actual['nombre']}* anotado ✅\n\n"
+                        "📐 ¿Qué *talla* tiene?\n"
+                        "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
+                    )
+
+                if not producto_actual.get("precio_venta"):
+                    datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"*{producto_actual['nombre']}* talla *{producto_actual['talla']}* ✅\n\n"
+                        "💰 ¿Cuál es el *precio de venta* en Soles?\n"
+                        "_(Ej: 35, 49.90, 120)_"
+                    )
+
+                if producto_actual.get("cantidad") is None:
+                    datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"*{producto_actual['nombre']}* · S/ {producto_actual['precio_venta']:.2f} ✅\n\n"
+                        "📦 ¿Cuántas *unidades* tienes en stock ahora?\n"
+                        "_(Ej: 10, 25 — escribe 0 si aún no tienes)_"
+                    )
+
+                # ── Todos los campos obligatorios presentes → guardar ──
+                etiqueta = producto_actual.get("etiqueta")  # puede ser None
+                # Si etiqueta no fue mencionada en el formulario, preguntar
+                if "etiqueta" not in campos:
+                    datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"*{producto_actual['nombre']}* · talla {producto_actual['talla']} · "
+                        f"S/ {producto_actual['precio_venta']:.2f} · {producto_actual['cantidad']} uds ✅\n\n"
+                        "🏷️ ¿Le pones una *etiqueta* para reconocerlo fácil?\n"
+                        "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
+                    )
+
+                # Tiene todo → insertar
+                return await self._guardar_y_confirmar_producto(
+                    negocio_id, datos_temp, producto_actual, etiqueta, productos_count
                 )
 
-            # ── Sub-paso: talla ──
+            # ── Sub-paso: nombre faltante (fallback) ──
+            elif sub_paso == "nombre_faltante":
+                producto_actual["nombre"] = mensaje.strip().title()
+                datos_temp["inv_producto_actual"] = producto_actual
+                datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                # Re-procesar con lo que ya tenemos
+                campos_existentes = {k: v for k, v in producto_actual.items()}
+                # Verificar cadena de faltantes
+                if not producto_actual.get("talla"):
+                    datos_temp["inv_sub_paso"] = SUB_PASO_TALLA
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"*{producto_actual['nombre']}* anotado ✅\n\n"
+                        "📐 ¿Qué *talla* tiene?\n"
+                        "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
+                    )
+                if not producto_actual.get("precio_venta"):
+                    datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"*{producto_actual['nombre']}* ✅ ¿Cuál es el *precio de venta* en Soles?\n"
+                        "_(Ej: 35, 49.90, 120)_"
+                    )
+                if producto_actual.get("cantidad") is None:
+                    datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"*{producto_actual['nombre']}* ✅ ¿Cuántas *unidades* tienes en stock?\n"
+                        "_(Ej: 10, 25 — escribe 0 si no tienes)_"
+                    )
+                datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return (
+                    "🏷️ ¿Le pones una *etiqueta*?\n"
+                    "_(Ej: verano24, outlet — o escribe *no*)_"
+                )
+
+            # ── Sub-paso: talla (fallback individual) ──
             elif sub_paso == SUB_PASO_TALLA:
                 talla = mensaje.strip().upper()
                 if not talla:
                     return "⚠️ La talla es obligatoria. ¿Cuál es la talla del producto?"
                 producto_actual["talla"] = talla
                 datos_temp["inv_producto_actual"] = producto_actual
-                datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
+                if not producto_actual.get("precio_venta"):
+                    datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"Talla *{talla}* ✅\n\n"
+                        "💰 ¿Cuál es el *precio de venta* en Soles?\n"
+                        "_(Ej: 35, 49.90, 120)_"
+                    )
+                if producto_actual.get("cantidad") is None:
+                    datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"Talla *{talla}* · S/ {producto_actual['precio_venta']:.2f} ✅\n\n"
+                        "📦 ¿Cuántas *unidades* tienes en stock?\n"
+                        "_(Ej: 10, 25 — escribe 0 si no tienes)_"
+                    )
+                datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                 return (
-                    f"Talla *{talla}* anotada ✅\n\n"
-                    "¿Cuál es el *precio de venta* unitario en Soles?\n"
-                    "_(Ej: 35, 49.90, 120)_"
+                    "🏷️ ¿Le pones una *etiqueta*?\n"
+                    "_(Ej: verano24, outlet — o escribe *no*)_"
                 )
 
-            # ── Sub-paso: precio ──
+            # ── Sub-paso: precio (fallback individual) ──
             elif sub_paso == SUB_PASO_PRECIO:
                 precio = self._parsear_precio(mensaje)
                 if precio is None or precio <= 0:
                     return "⚠️ No pude leer el precio. Escríbelo en números, ej: _49.90_"
                 producto_actual["precio_venta"] = precio
                 datos_temp["inv_producto_actual"] = producto_actual
-                datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
+                if producto_actual.get("cantidad") is None:
+                    datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"Precio *S/ {precio:.2f}* ✅\n\n"
+                        "📦 ¿Cuántas *unidades* tienes en stock?\n"
+                        "_(Ej: 10, 25 — escribe 0 si no tienes)_"
+                    )
+                datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                 return (
-                    f"Precio *S/ {precio:.2f}* anotado ✅\n\n"
-                    "¿Cuántas *unidades* tienes en stock ahora mismo?\n"
-                    "_(Ej: 10, 25, 0 si aún no tienes)_"
+                    "🏷️ ¿Le pones una *etiqueta*?\n"
+                    "_(Ej: verano24, outlet — o escribe *no*)_"
                 )
 
-            # ── Sub-paso: stock ──
+            # ── Sub-paso: stock (fallback individual) ──
             elif sub_paso == SUB_PASO_STOCK:
                 cantidad = self._parsear_cantidad(mensaje)
                 if cantidad is None:
@@ -724,54 +967,18 @@ class OnboardingService:
                 datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                 return (
-                    f"Stock *{cantidad} uds* anotado ✅\n\n"
-                    "¿Le pones una *etiqueta* para reconocerlo fácil?\n"
+                    f"Stock *{cantidad} uds* ✅\n\n"
+                    "🏷️ ¿Le pones una *etiqueta* para reconocerlo fácil?\n"
                     "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
                 )
 
             # ── Sub-paso: etiqueta ──
             elif sub_paso == SUB_PASO_ETIQUETA:
                 etiqueta = None if self._es_omision(mensaje) else mensaje.strip()
-
-                # ── Guardar producto en BD ──
-                try:
-                    await self.insertar_producto_con_stock(
-                        negocio_id     = negocio_id,
-                        nombre         = producto_actual["nombre"],
-                        talla          = producto_actual["talla"],
-                        precio_venta   = producto_actual["precio_venta"],
-                        cantidad       = producto_actual["cantidad"],
-                        etiqueta       = etiqueta,
-                    )
-                    productos_count += 1
-                    datos_temp["inv_productos_cargados"] = productos_count
-                except Exception as e:
-                    logger.error(f"[Onboarding] Error al guardar producto: {e}")
-                    return (
-                        "⚠️ Hubo un error al guardar el producto. "
-                        "Intenta de nuevo escribiendo el nombre."
-                    )
-
-                # Resumen del producto guardado
-                etiqueta_txt = f" · _{etiqueta}_" if etiqueta else ""
-                resumen = (
-                    f"✅ *{producto_actual['nombre']}* guardado\n"
-                    f"   Talla: {producto_actual['talla']} · "
-                    f"S/ {producto_actual['precio_venta']:.2f} · "
-                    f"{producto_actual['cantidad']} uds{etiqueta_txt}\n\n"
-                )
-
-                # Limpiar producto_actual y preguntar si sigue
-                datos_temp["inv_producto_actual"] = {}
-                datos_temp["inv_sub_paso"] = SUB_PASO_CONTINUAR
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-
-                return (
-                    resumen +
-                    f"Llevas *{productos_count}* producto(s) cargado(s) 🎉\n\n"
-                    "¿Qué hacemos?\n"
-                    "➕ Escribe *otro* para agregar más\n"
-                    "✅ Escribe *listo* para continuar"
+                producto_actual["etiqueta"] = etiqueta
+                datos_temp["inv_producto_actual"] = producto_actual
+                return await self._guardar_y_confirmar_producto(
+                    negocio_id, datos_temp, producto_actual, etiqueta, productos_count
                 )
 
             # ── Sub-paso: continuar o terminar ──
@@ -779,16 +986,13 @@ class OnboardingService:
                 if any(p in msg_lower for p in ["otro", "más", "mas", "agregar", "sí", "si", "seguir", "continuar"]):
                     datos_temp["inv_sub_paso"] = SUB_PASO_NOMBRE
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        "¡Perfecto! ¿Cómo se llama el siguiente producto?\n"
-                        "_(Ej: Polo básico, Jean slim, Blusa floral)_"
-                    )
+                    return self._mensaje_plantilla_producto(datos_temp.get("inv_productos_cargados", 0) + 1)
+
                 elif self._detectar_confirmacion(msg_lower):
-                    # Terminar carga de inventario → ir al paso 6
                     await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
-                    productos_count = datos_temp.get("inv_productos_cargados", 0)
                     return (
-                        f"¡Excelente! 🎉 Quedaron *{productos_count}* producto(s) en tu inventario.\n\n"
+                        f"¡Excelente! 🎉 Quedaron *{datos_temp.get('inv_productos_cargados', 0)}* "
+                        f"producto(s) en tu inventario.\n\n"
                         "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
                         "_(Ej: 8pm, 20:00, 9 de la noche)_"
                     )
@@ -798,12 +1002,12 @@ class OnboardingService:
                         "o *listo* para continuar con la configuración."
                     )
 
-            # ── Sub-paso desconocido: reiniciar desde nombre ──
+            # ── Sub-paso desconocido: reiniciar ──
             else:
                 datos_temp["inv_sub_paso"] = SUB_PASO_NOMBRE
                 datos_temp["inv_producto_actual"] = {}
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return "¿Cómo se llama el siguiente producto?"
+                return self._mensaje_plantilla_producto(datos_temp.get("inv_productos_cargados", 0) + 1)
 
         # ══════════════════════════════════════════
         #  PASO 6 → Capturar horario de cierre
