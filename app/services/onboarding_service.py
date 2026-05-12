@@ -34,9 +34,12 @@ Schema usado:
 
 import json
 import re
+import uuid
+import decimal
 import logging
 from app.database import get_pool
 from app.services.gemini_service import gemini_service
+from datetime import datetime, date
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +105,7 @@ class OnboardingService:
                 """,
                 negocio_id,
                 estado,
-                json.dumps(datos_temp or {}),
+                json.dumps(datos_temp or {}, default=_json_serial),
             )
 
     async def crear_negocio(self, telefono: str) -> str:
@@ -336,6 +339,15 @@ class OnboardingService:
                 resultado["etiqueta"] = None
 
         return resultado
+
+    def _json_serial(obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        if isinstance(obj, uuid.UUID):
+            return str(obj)
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)
+        raise TypeError(f"Type {type(obj)} not serializable")
 
     def _mensaje_plantilla_producto(self, num_producto: int = 1) -> str:
         """
