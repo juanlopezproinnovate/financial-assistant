@@ -33,6 +33,7 @@ Schema usado:
 """
 
 import json
+import re
 import logging
 from app.database import get_pool
 from app.services.gemini_service import gemini_service
@@ -421,19 +422,25 @@ class OnboardingService:
 
         etiqueta_txt = f" · _{etiqueta}_" if etiqueta else ""
         resumen = (
-            f"✅ *{producto_actual['nombre']}* guardado\n"
-            f"   Talla: {producto_actual['talla']} · "
-            f"S/ {producto_actual['precio_venta']:.2f} · "
-            f"{producto_actual['cantidad']} uds{etiqueta_txt}\n\n"
+            f"✅ *{producto_actual['nombre']}* guardado\n\n"
+            f"📐 Talla: {producto_actual['talla']}\n"
+            f"💰 Precio: S/ {producto_actual['precio_venta']:.2f}\n"
+            f"📦 Stock: {producto_actual['cantidad']} unidades\n"
+            f"{f'🏷️ Etiqueta: {etiqueta}' if etiqueta else ''}\n\n"
         )
 
         datos_temp["inv_producto_actual"] = {}
         datos_temp["inv_sub_paso"] = SUB_PASO_CONTINUAR
         await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
 
+        if productos_count == 1:
+            mensaje_progreso = "📦 Has cargado tu inventario inicial correctamente 🎉\n\n"
+        else:
+            mensaje_progreso = f"Llevas *{productos_count}* producto(s) cargado(s) 🎉\n\n"
+
         return (
             resumen +
-            f"Llevas *{productos_count}* producto(s) cargado(s) 🎉\n\n"
+            mensaje_progreso +
             "¿Qué hacemos?\n"
             "➕ Escribe *otro* para agregar más\n"
             "✅ Escribe *listo* para continuar"
@@ -803,9 +810,10 @@ class OnboardingService:
                     if "precio" in partes:
                         producto_actual["precio_venta"] = self._parsear_precio(partes)
 
-                    if "stock" in partes or "tengo" in partes:
-                        producto_actual["cantidad"] = self._parsear_cantidad(partes)
-
+                    match = re.search(r"(stock|tengo)\D*(\d+)", partes)
+                    if match:
+                        producto_actual["cantidad"] = int(match.group(2))
+                    
                 campos = self._parsear_formulario_producto(mensaje)
 
                 # Guardar lo que llegó en producto_actual
@@ -815,8 +823,20 @@ class OnboardingService:
                     producto_actual["talla"] = campos["talla"].upper()
                 if "precio" in campos and campos["precio"]:
                     producto_actual["precio_venta"] = campos["precio"]
-                if "stock" in campos and campos["stock"] is not None:
-                    producto_actual["cantidad"] = campos["stock"]
+                # 1. intentar detectar contexto primero
+                match = re.search(r"(stock|tengo|hay|quedan|me quedan)\D*(\d+)", partes)
+
+                if match:
+                    producto_actual["cantidad"] = int(match.group(2))
+                else:
+                    # 2. fallback: tomar el último número del mensaje
+                    numeros = re.findall(r"\d+", partes)
+
+                    if numeros:
+                        if len(numeros) > 1:
+                            producto_actual["cantidad"] = int(numeros[-1])
+                        else:
+                            producto_actual["cantidad"] = int(numeros[0])
                 # etiqueta puede ser None explícito (omisión)
                 if "etiqueta" in campos:
                     producto_actual["etiqueta"] = campos["etiqueta"]
