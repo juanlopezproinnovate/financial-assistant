@@ -7,19 +7,29 @@ Flujo de onboarding completo:
   onboarding_3  → Capturar monedas aceptadas (PEN / CLP / ambas)
   onboarding_4  → Capturar tipo de ropa
   onboarding_5  → Proponer categorías y permitir ajustes hasta "listo"
+  onboarding_5b → Preguntar si carga inventario ahora, después o desde dashboard
+  onboarding_5c → Bucle de carga de productos (nombre, talla, precio, stock, etiqueta)
   onboarding_6  → Capturar horario de cierre → completar onboarding
 
-Cambios v2:
+Cambios v3:
+  - Nuevo paso onboarding_5b: elegir cuándo cargar inventario
+  - Nuevo paso onboarding_5c: bucle de carga producto a producto
+    · Solicita nombre, talla (obligatoria), precio unitario, cantidad en stock, etiqueta (opcional)
+    · Inserta en tablas `productos` y `stock`
+    · Al finalizar cada producto pregunta si sigue o termina
   - _leer_historial(): lee los últimos N pares del campo datos_temporales
   - guardar_en_historial(): persiste el par (user, assistant) en datos_temporales
     sin pisar otros campos como candidatos_stock, etc.
 
 Schema usado:
-  negocios  : whatsapp_numero, nombre_negocio, nombre_propietario, rubro,
-              monedas_aceptadas, horario_cierre, estado, onboarding_completo
-  sesiones  : negocio_id (FK), estado_conversacion, datos_temporales
-  categorias: negocio_id (FK), nombre, tipo, color, activa
+  negocios           : whatsapp_numero, nombre_negocio, nombre_propietario, rubro,
+                       monedas_aceptadas, horario_cierre, estado, onboarding_completo
+  sesiones           : negocio_id (FK), estado_conversacion, datos_temporales
+  categorias         : negocio_id (FK), nombre, tipo, color, activa
   categorias_plantilla: tipo_ropa, categorias (jsonb array)
+  productos          : negocio_id (FK), nombre, nombre_variantes, precio_venta_pen,
+                       unidad, activo, categoria_id
+  stock              : producto_id (FK, unique), cantidad_actual, cantidad_minima
 """
 
 import json
@@ -33,6 +43,16 @@ logger = logging.getLogger(__name__)
 #  Palabras clave que el cliente usa para confirmar que las categorías están ok
 # ──────────────────────────────────────────────────────────────────────────────
 PALABRAS_CONFIRMAR = {"listo", "ok", "bien", "perfecto", "dale", "sí", "si", "ya", "confirmar"}
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Sub-pasos dentro de onboarding_5c (carga de inventario)
+# ──────────────────────────────────────────────────────────────────────────────
+SUB_PASO_NOMBRE    = "nombre"
+SUB_PASO_TALLA     = "talla"
+SUB_PASO_PRECIO    = "precio"
+SUB_PASO_STOCK     = "stock"
+SUB_PASO_ETIQUETA  = "etiqueta"
+SUB_PASO_CONTINUAR = "continuar"
 
 
 class OnboardingService:
@@ -127,10 +147,6 @@ class OnboardingService:
     # ──────────────────────────────────────────────
 
     async def buscar_plantilla_categorias(self, tipo_ropa_normalizado: str) -> list[str] | None:
-        """
-        Busca categorías pre-generadas para ese tipo de ropa.
-        Retorna lista de strings o None si no existe.
-        """
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -145,10 +161,6 @@ class OnboardingService:
         return list(raw)
 
     async def guardar_plantilla_categorias(self, tipo_ropa_normalizado: str, categorias: list[str]) -> None:
-        """
-        Guarda o actualiza plantilla de categorías para este tipo de ropa.
-        Si ya existe, incrementa el contador de uso.
-        """
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
@@ -165,10 +177,6 @@ class OnboardingService:
             )
 
     async def guardar_categorias_negocio(self, negocio_id: str, categorias: list[str]) -> None:
-        """
-        Inserta las categorías finales del negocio en la tabla `categorias`.
-        Borra las anteriores primero para evitar duplicados.
-        """
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
@@ -185,11 +193,92 @@ class OnboardingService:
                 )
 
     # ──────────────────────────────────────────────
+    #  QUERIES — productos + stock (onboarding_5c)
+    # ──────────────────────────────────────────────
+
+    async def _buscar_categoria_id(self, negocio_id: str, nombre_categoria: str) -> str | None:
+        """Busca el UUID de una categoría por nombre para asociar el producto."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id FROM categorias
+                WHERE negocio_id = $1 AND LOWER(nombre) = LOWER($2) AND activa = true
+                LIMIT 1
+                """,
+                negocio_id,
+                nombre_categoria,
+            )
+        return str(row["id"]) if row else None
+
+    async def insertar_producto_con_stock(
+        self,
+        negocio_id: str,
+        nombre: str,
+        talla: str,
+        precio_venta: float,
+        cantidad: int,
+        etiqueta: str | None = None,
+        categoria_nombre: str | None = None,
+    ) -> str:
+        """
+        Inserta un producto en `productos` y crea su registro en `stock`.
+        Retorna el producto_id creado.
+        El campo nombre_variantes se usa para almacenar la talla.
+        La etiqueta se guarda como variante adicional si fue provista.
+        """
+        pool = await get_pool()
+
+        # Armar nombre_variantes: siempre incluye la talla, opcionalmente la etiqueta
+        variantes = [talla]
+        if etiqueta:
+            variantes.append(etiqueta)
+
+        # Resolver categoria_id si fue dado
+        categoria_id = None
+        if categoria_nombre:
+            categoria_id = await self._buscar_categoria_id(negocio_id, categoria_nombre)
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO productos
+                    (negocio_id, nombre, nombre_variantes, precio_venta_pen, unidad, activo, categoria_id)
+                VALUES
+                    ($1, $2, $3, $4, 'unidad', true, $5)
+                RETURNING id
+                """,
+                negocio_id,
+                nombre.strip(),
+                variantes,
+                precio_venta,
+                categoria_id,
+            )
+            producto_id = str(row["id"])
+
+            await conn.execute(
+                """
+                INSERT INTO stock (producto_id, cantidad_actual, cantidad_minima)
+                VALUES ($1, $2, 5)
+                ON CONFLICT (producto_id) DO UPDATE
+                    SET cantidad_actual       = $2,
+                        ultima_actualizacion  = NOW()
+                """,
+                producto_id,
+                cantidad,
+            )
+
+        logger.info(
+            f"[Onboarding] Producto creado: '{nombre}' talla={talla} "
+            f"precio={precio_venta} stock={cantidad} negocio={negocio_id}"
+        )
+        return producto_id
+
+    # ──────────────────────────────────────────────
     #  HELPERS — datos temporales
     # ──────────────────────────────────────────────
 
     def _leer_datos_temp(self, sesion: dict | None) -> dict:
-        """Deserializa datos_temporales de la sesión a dict."""
         if not sesion:
             return {}
         raw = sesion.get("datos_temporales", {})
@@ -205,10 +294,6 @@ class OnboardingService:
     # ──────────────────────────────────────────────
 
     def _leer_historial(self, sesion: dict | None) -> list[dict]:
-        """
-        Retorna la lista de mensajes anteriores guardados en datos_temporales.
-        Formato: [{"role": "user"|"assistant", "content": str}, ...]
-        """
         datos = self._leer_datos_temp(sesion)
         return datos.get("historial_mensajes", [])
 
@@ -220,28 +305,18 @@ class OnboardingService:
         bot_msg: str,
         max_turns: int = 3,
     ) -> None:
-        """
-        Agrega el par (user, assistant) al historial dentro de datos_temporales
-        y recorta a los últimos max_turns turnos (cada turno = 2 mensajes).
-
-        Preserva todos los demás campos de datos_temporales (candidatos_stock,
-        transaccion_id, etc.) — solo toca la clave 'historial_mensajes'.
-        """
-        # Leer datos_temp actuales para no pisar otros campos
         datos = self._leer_datos_temp(sesion)
         historial = datos.get("historial_mensajes", [])
 
         historial.append({"role": "user",      "content": user_msg})
         historial.append({"role": "assistant",  "content": bot_msg})
 
-        # Mantener solo los últimos max_turns turnos
         max_mensajes = max_turns * 2
         if len(historial) > max_mensajes:
             historial = historial[-max_mensajes:]
 
         datos["historial_mensajes"] = historial
 
-        # Persistir preservando el estado actual de la sesión
         estado_actual = (
             sesion.get("estado_conversacion", "activo") if sesion else "activo"
         )
@@ -252,23 +327,15 @@ class OnboardingService:
     # ──────────────────────────────────────────────
 
     def _normalizar_tipo_ropa(self, texto: str) -> str:
-        """Normaliza el tipo de ropa a minúsculas sin espacios extras."""
         return texto.strip().lower()
 
     def _detectar_confirmacion(self, mensaje: str) -> bool:
-        """Retorna True si el mensaje es una confirmación del cliente."""
         return mensaje.strip().lower() in PALABRAS_CONFIRMAR
 
     def _formatear_lista_categorias(self, categorias: list[str]) -> str:
-        """Convierte lista a texto numerado para mostrar por WhatsApp."""
         return "\n".join(f"{i+1}. {c}" for i, c in enumerate(categorias))
 
     def _filtrar_categorias_validas(self, categorias: list[str]) -> list[str]:
-        """
-        Permite SOLO prendas superiores e inferiores.
-        Excluye calzado, accesorios, etc.
-        """
-
         permitidas = {
             # ───────── SUPERIORES ─────────
             "polo", "polos", "camiseta", "camisetas", "camisa", "camisas",
@@ -283,7 +350,6 @@ class OnboardingService:
             "jersey", "jerseys",
             "poncho", "ponchos",
             "casaca jean", "casacas jean", "chaqueta jean",
-
             # ───────── INFERIORES ─────────
             "pantalon", "pantalones", "pantalón", "pantalones",
             "jean", "jeans", "vaquero", "vaqueros",
@@ -302,25 +368,18 @@ class OnboardingService:
         }
 
         categorias_validas = []
-
         for c in categorias:
             c_norm = c.strip().lower()
-
-            # match directo
             if c_norm in permitidas:
                 categorias_validas.append(c.strip())
                 continue
-
-            # match parcial (clave 🔥 para cosas como "pantalon cargo", "polo oversize")
             for p in permitidas:
                 if p in c_norm:
                     categorias_validas.append(c.strip())
                     break
 
-        # eliminar duplicados manteniendo orden
         categorias_validas = list(dict.fromkeys(categorias_validas))
 
-        # fallback si todo fue filtrado
         if not categorias_validas:
             return ["Polos", "Pantalones", "Shorts", "Blusas"]
 
@@ -347,9 +406,34 @@ class OnboardingService:
         ])
 
         categorias_filtradas = self._filtrar_categorias_validas(categorias_nuevas)
-
         await self.guardar_plantilla_categorias(tipo_normalizado, categorias_filtradas)
         return categorias_filtradas
+
+    # ──────────────────────────────────────────────
+    #  HELPERS — parseo de datos de inventario
+    # ──────────────────────────────────────────────
+
+    def _parsear_precio(self, texto: str) -> float | None:
+        """Intenta extraer un número decimal del texto ingresado."""
+        import re
+        texto_limpio = texto.replace(",", ".").strip()
+        match = re.search(r"\d+(\.\d+)?", texto_limpio)
+        if match:
+            return float(match.group())
+        return None
+
+    def _parsear_cantidad(self, texto: str) -> int | None:
+        """Intenta extraer un entero del texto ingresado."""
+        import re
+        match = re.search(r"\d+", texto.strip())
+        if match:
+            return int(match.group())
+        return None
+
+    def _es_omision(self, texto: str) -> bool:
+        """Retorna True si el usuario quiere omitir un campo opcional."""
+        omisiones = {"no", "ninguno", "ninguna", "omitir", "saltar", "-", "n/a", "nada", "sin etiqueta"}
+        return texto.strip().lower() in omisiones
 
     # ──────────────────────────────────────────────
     #  FLUJO PRINCIPAL
@@ -478,11 +562,13 @@ class OnboardingService:
             # ── Confirmación ──
             if self._detectar_confirmacion(msg_lower):
                 await self.guardar_categorias_negocio(negocio_id, categorias)
-                await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
+                await self.upsert_sesion(negocio_id, "onboarding_5b", datos_temp)
                 return (
                     "¡Perfecto! 📦 Categorías guardadas.\n\n"
-                    "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
-                    "_(Ej: 8pm, 20:00, 9 de la noche)_"
+                    "¿Quieres cargar tu inventario ahora?\n\n"
+                    "1️⃣ *Sí, ahora* — te guío producto a producto\n"
+                    "2️⃣ *Después* — lo iré registrando mientras vendo\n"
+                    "3️⃣ *Dashboard* — lo cargo con calma desde la web"
                 )
 
             # ── Agregar categoría ──
@@ -531,6 +617,195 @@ class OnboardingService:
             )
 
         # ══════════════════════════════════════════
+        #  PASO 5b → Decidir cuándo cargar inventario
+        # ══════════════════════════════════════════
+        elif estado == "onboarding_5b":
+            msg_lower = mensaje.strip().lower()
+
+            # Detectar opción 1: cargar ahora
+            cargar_ahora = any(p in msg_lower for p in [
+                "1", "sí", "si", "ahora", "ahora mismo", "quiero", "vamos", "dale",
+            ])
+            # Detectar opción 2 o 3: cargar después o desde dashboard
+            cargar_despues = any(p in msg_lower for p in [
+                "2", "3", "después", "despues", "luego", "mas tarde", "más tarde",
+                "dashboard", "web", "no", "nope",
+            ])
+
+            if cargar_ahora and not cargar_despues:
+                # Iniciar sub-flujo de carga de productos
+                datos_temp["inv_sub_paso"]         = SUB_PASO_NOMBRE
+                datos_temp["inv_producto_actual"]  = {}
+                datos_temp["inv_productos_cargados"] = datos_temp.get("inv_productos_cargados", 0)
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return (
+                    "¡Genial! Vamos a cargar tu inventario 📦\n\n"
+                    "¿Cómo se llama el primer producto?\n"
+                    "_(Ej: Polo básico, Jean slim, Blusa floral)_"
+                )
+
+            elif cargar_despues:
+                # Saltar directamente al paso 6
+                await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
+                return (
+                    "Sin problema, puedes cargarlo cuando quieras 😊\n\n"
+                    "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
+                    "_(Ej: 8pm, 20:00, 9 de la noche)_"
+                )
+
+            else:
+                # No se entendió la opción
+                return (
+                    "No entendí bien 😅 Elige una opción:\n\n"
+                    "1️⃣ *Sí, ahora* — te guío producto a producto\n"
+                    "2️⃣ *Después* — lo registro mientras vendo\n"
+                    "3️⃣ *Dashboard* — lo cargo desde la web"
+                )
+
+        # ══════════════════════════════════════════
+        #  PASO 5c → Bucle de carga de productos
+        # ══════════════════════════════════════════
+        elif estado == "onboarding_5c":
+            sub_paso         = datos_temp.get("inv_sub_paso", SUB_PASO_NOMBRE)
+            producto_actual  = datos_temp.get("inv_producto_actual", {})
+            productos_count  = datos_temp.get("inv_productos_cargados", 0)
+            msg_lower        = mensaje.strip().lower()
+
+            # ── Sub-paso: nombre ──
+            if sub_paso == SUB_PASO_NOMBRE:
+                nombre_producto = mensaje.strip().title()
+                producto_actual["nombre"] = nombre_producto
+                datos_temp["inv_producto_actual"] = producto_actual
+                datos_temp["inv_sub_paso"] = SUB_PASO_TALLA
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return (
+                    f"📝 *{nombre_producto}*\n\n"
+                    "¿Qué *talla* tiene este producto?\n"
+                    "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
+                )
+
+            # ── Sub-paso: talla ──
+            elif sub_paso == SUB_PASO_TALLA:
+                talla = mensaje.strip().upper()
+                if not talla:
+                    return "⚠️ La talla es obligatoria. ¿Cuál es la talla del producto?"
+                producto_actual["talla"] = talla
+                datos_temp["inv_producto_actual"] = producto_actual
+                datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return (
+                    f"Talla *{talla}* anotada ✅\n\n"
+                    "¿Cuál es el *precio de venta* unitario en Soles?\n"
+                    "_(Ej: 35, 49.90, 120)_"
+                )
+
+            # ── Sub-paso: precio ──
+            elif sub_paso == SUB_PASO_PRECIO:
+                precio = self._parsear_precio(mensaje)
+                if precio is None or precio <= 0:
+                    return "⚠️ No pude leer el precio. Escríbelo en números, ej: _49.90_"
+                producto_actual["precio_venta"] = precio
+                datos_temp["inv_producto_actual"] = producto_actual
+                datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return (
+                    f"Precio *S/ {precio:.2f}* anotado ✅\n\n"
+                    "¿Cuántas *unidades* tienes en stock ahora mismo?\n"
+                    "_(Ej: 10, 25, 0 si aún no tienes)_"
+                )
+
+            # ── Sub-paso: stock ──
+            elif sub_paso == SUB_PASO_STOCK:
+                cantidad = self._parsear_cantidad(mensaje)
+                if cantidad is None:
+                    return "⚠️ Escribe la cantidad en números, ej: _15_"
+                producto_actual["cantidad"] = cantidad
+                datos_temp["inv_producto_actual"] = producto_actual
+                datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return (
+                    f"Stock *{cantidad} uds* anotado ✅\n\n"
+                    "¿Le pones una *etiqueta* para reconocerlo fácil?\n"
+                    "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
+                )
+
+            # ── Sub-paso: etiqueta ──
+            elif sub_paso == SUB_PASO_ETIQUETA:
+                etiqueta = None if self._es_omision(mensaje) else mensaje.strip()
+
+                # ── Guardar producto en BD ──
+                try:
+                    await self.insertar_producto_con_stock(
+                        negocio_id     = negocio_id,
+                        nombre         = producto_actual["nombre"],
+                        talla          = producto_actual["talla"],
+                        precio_venta   = producto_actual["precio_venta"],
+                        cantidad       = producto_actual["cantidad"],
+                        etiqueta       = etiqueta,
+                    )
+                    productos_count += 1
+                    datos_temp["inv_productos_cargados"] = productos_count
+                except Exception as e:
+                    logger.error(f"[Onboarding] Error al guardar producto: {e}")
+                    return (
+                        "⚠️ Hubo un error al guardar el producto. "
+                        "Intenta de nuevo escribiendo el nombre."
+                    )
+
+                # Resumen del producto guardado
+                etiqueta_txt = f" · _{etiqueta}_" if etiqueta else ""
+                resumen = (
+                    f"✅ *{producto_actual['nombre']}* guardado\n"
+                    f"   Talla: {producto_actual['talla']} · "
+                    f"S/ {producto_actual['precio_venta']:.2f} · "
+                    f"{producto_actual['cantidad']} uds{etiqueta_txt}\n\n"
+                )
+
+                # Limpiar producto_actual y preguntar si sigue
+                datos_temp["inv_producto_actual"] = {}
+                datos_temp["inv_sub_paso"] = SUB_PASO_CONTINUAR
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+
+                return (
+                    resumen +
+                    f"Llevas *{productos_count}* producto(s) cargado(s) 🎉\n\n"
+                    "¿Qué hacemos?\n"
+                    "➕ Escribe *otro* para agregar más\n"
+                    "✅ Escribe *listo* para continuar"
+                )
+
+            # ── Sub-paso: continuar o terminar ──
+            elif sub_paso == SUB_PASO_CONTINUAR:
+                if any(p in msg_lower for p in ["otro", "más", "mas", "agregar", "sí", "si", "seguir", "continuar"]):
+                    datos_temp["inv_sub_paso"] = SUB_PASO_NOMBRE
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        "¡Perfecto! ¿Cómo se llama el siguiente producto?\n"
+                        "_(Ej: Polo básico, Jean slim, Blusa floral)_"
+                    )
+                elif self._detectar_confirmacion(msg_lower):
+                    # Terminar carga de inventario → ir al paso 6
+                    await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
+                    productos_count = datos_temp.get("inv_productos_cargados", 0)
+                    return (
+                        f"¡Excelente! 🎉 Quedaron *{productos_count}* producto(s) en tu inventario.\n\n"
+                        "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
+                        "_(Ej: 8pm, 20:00, 9 de la noche)_"
+                    )
+                else:
+                    return (
+                        "Escribe *otro* para agregar más productos "
+                        "o *listo* para continuar con la configuración."
+                    )
+
+            # ── Sub-paso desconocido: reiniciar desde nombre ──
+            else:
+                datos_temp["inv_sub_paso"] = SUB_PASO_NOMBRE
+                datos_temp["inv_producto_actual"] = {}
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return "¿Cómo se llama el siguiente producto?"
+
+        # ══════════════════════════════════════════
         #  PASO 6 → Capturar horario de cierre
         # ══════════════════════════════════════════
         elif estado == "onboarding_6":
@@ -544,7 +819,7 @@ class OnboardingService:
             await self.upsert_sesion(negocio_id, "activo", {})
 
             nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
-            nombre_prop = datos_temp.get("nombre_propietario", "")
+            nombre_prop    = datos_temp.get("nombre_propietario", "")
             return (
                 f"¡Todo listo, {nombre_prop}! 🎉\n\n"
                 f"*{nombre_negocio}* ya está configurado en Quri.\n\n"
