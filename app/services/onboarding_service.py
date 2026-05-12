@@ -747,15 +747,11 @@ class OnboardingService:
 
             if cargar_ahora and not cargar_despues:
                 # Iniciar sub-flujo de carga de productos
-                datos_temp["inv_sub_paso"]         = SUB_PASO_NOMBRE
+                datos_temp["inv_sub_paso"]         = SUB_PASO_COMPLETO
                 datos_temp["inv_producto_actual"]  = {}
                 datos_temp["inv_productos_cargados"] = datos_temp.get("inv_productos_cargados", 0)
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return (
-                    "¡Genial! Vamos a cargar tu inventario 📦\n\n"
-                    "¿Cómo se llama el primer producto?\n"
-                    "_(Ej: Polo básico, Jean slim, Blusa floral)_"
-                )
+                return self._mensaje_plantilla_producto(1)
 
             elif cargar_despues:
                 # Saltar directamente al paso 6
@@ -784,16 +780,32 @@ class OnboardingService:
             productos_count  = datos_temp.get("inv_productos_cargados", 0)
             msg_lower        = mensaje.strip().lower()
 
-            # ── Sub-paso: mostrar plantilla y esperar datos completos ──
-            if sub_paso == SUB_PASO_NOMBRE:
-                num = productos_count + 1
-                datos_temp["inv_sub_paso"]        = SUB_PASO_COMPLETO
-                datos_temp["inv_producto_actual"] = {}
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return self._mensaje_plantilla_producto(num)
-
             # ── Sub-paso: parsear respuesta del formulario completo ──
-            elif sub_paso == SUB_PASO_COMPLETO:
+            if sub_paso == SUB_PASO_COMPLETO:
+
+                texto = mensaje.strip()
+
+                # heurística rápida: si no viene con etiquetas pero parece frase
+                if ":" not in texto:
+                    partes = texto.lower()
+
+                    # nombre (todo antes de "talla" o "precio")
+                    if "talla" in partes:
+                        nombre = partes.split("talla")[0].strip()
+                        producto_actual["nombre"] = nombre.title()
+
+                    if "talla" in partes:
+                        import re
+                        m = re.search(r"talla\s*([a-z0-9]+)", partes)
+                        if m:
+                            producto_actual["talla"] = m.group(1).upper()
+
+                    if "precio" in partes:
+                        producto_actual["precio_venta"] = self._parsear_precio(partes)
+
+                    if "stock" in partes or "tengo" in partes:
+                        producto_actual["cantidad"] = self._parsear_cantidad(partes)
+
                 campos = self._parsear_formulario_producto(mensaje)
 
                 # Guardar lo que llegó en producto_actual
@@ -810,6 +822,17 @@ class OnboardingService:
                     producto_actual["etiqueta"] = campos["etiqueta"]
 
                 datos_temp["inv_producto_actual"] = producto_actual
+
+                if (
+                    producto_actual.get("nombre")
+                    and producto_actual.get("talla")
+                    and producto_actual.get("precio_venta")
+                    and producto_actual.get("cantidad") is not None
+                ):
+                    etiqueta = producto_actual.get("etiqueta")
+                    return await self._guardar_y_confirmar_producto(
+                        negocio_id, datos_temp, producto_actual, etiqueta, productos_count
+                    )
 
                 # ── Determinar qué falta y pedir solo eso ──
                 if not producto_actual.get("nombre"):
@@ -865,44 +888,6 @@ class OnboardingService:
                 # Tiene todo → insertar
                 return await self._guardar_y_confirmar_producto(
                     negocio_id, datos_temp, producto_actual, etiqueta, productos_count
-                )
-
-            # ── Sub-paso: nombre faltante (fallback) ──
-            elif sub_paso == "nombre_faltante":
-                producto_actual["nombre"] = mensaje.strip().title()
-                datos_temp["inv_producto_actual"] = producto_actual
-                datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                # Re-procesar con lo que ya tenemos
-                campos_existentes = {k: v for k, v in producto_actual.items()}
-                # Verificar cadena de faltantes
-                if not producto_actual.get("talla"):
-                    datos_temp["inv_sub_paso"] = SUB_PASO_TALLA
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"*{producto_actual['nombre']}* anotado ✅\n\n"
-                        "📐 ¿Qué *talla* tiene?\n"
-                        "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
-                    )
-                if not producto_actual.get("precio_venta"):
-                    datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"*{producto_actual['nombre']}* ✅ ¿Cuál es el *precio de venta* en Soles?\n"
-                        "_(Ej: 35, 49.90, 120)_"
-                    )
-                if producto_actual.get("cantidad") is None:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"*{producto_actual['nombre']}* ✅ ¿Cuántas *unidades* tienes en stock?\n"
-                        "_(Ej: 10, 25 — escribe 0 si no tienes)_"
-                    )
-                datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return (
-                    "🏷️ ¿Le pones una *etiqueta*?\n"
-                    "_(Ej: verano24, outlet — o escribe *no*)_"
                 )
 
             # ── Sub-paso: talla (fallback individual) ──
