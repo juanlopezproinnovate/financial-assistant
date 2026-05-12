@@ -105,7 +105,7 @@ class OnboardingService:
                 """,
                 negocio_id,
                 estado,
-                json.dumps(datos_temp or {}, default=_json_serial),
+                json.dumps(datos_temp or {}, default=self._json_serial),
             )
 
     async def crear_negocio(self, telefono: str) -> str:
