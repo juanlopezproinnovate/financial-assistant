@@ -685,6 +685,63 @@ No incluyas texto adicional ni markdown."""
     def _es_omision_etiqueta(self, texto: str) -> bool:
         omisiones = {"no", "ninguno", "ninguna", "omitir", "saltar", "-", "n/a", "nada", "sin etiqueta"}
         return texto.strip().lower() in omisiones
+    
+    async def sugerir_categoria_producto(
+        self,
+        nombre_producto: str,
+        categorias_negocio: list[str],
+    ) -> dict:
+        """
+        Dado el nombre de un producto y las categorías existentes del negocio,
+        intenta hacer match semántico y devuelve la categoría sugerida o None.
+        
+        Retorna:
+        {
+        "match": true | false,
+        "categoria": "nombre de la categoría" | null
+        }
+        """
+        if not categorias_negocio:
+            return {"match": False, "categoria": None}
+
+        lista = ", ".join(f'"{c}"' for c in categorias_negocio)
+        prompt = (
+            f'Producto: "{nombre_producto}"\n'
+            f'Categorías disponibles: [{lista}]\n\n'
+            f'¿A cuál de esas categorías pertenece este producto?\n'
+            f'Responde SOLO con JSON válido:\n'
+            f'{{"match": true|false, "categoria": "nombre exacto de la categoría o null"}}\n\n'
+            f'Reglas:\n'
+            f'- match true solo si hay una categoría claramente correcta.\n'
+            f'- categoria debe ser el nombre EXACTO de una de la lista, o null si match=false.\n'
+            f'- Ejemplos: "Polo Urbanno" → "Polos"; "Jean Slim" → "Jeans"; "Chompa lana" → "Chompas"\n'
+            f'- Si no hay ninguna que aplique claramente → match: false, categoria: null'
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Eres un clasificador de productos de ropa. Responde SOLO con JSON válido.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=64,
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
+            resultado = json.loads(raw)
+            # Validar que categoria sea una de la lista
+            if resultado.get("match") and resultado.get("categoria") not in categorias_negocio:
+                resultado["match"] = False
+                resultado["categoria"] = None
+            logger.info(f"[Groq] sugerir_categoria '{nombre_producto}' → {resultado}")
+            return resultado
+        except Exception as e:
+            logger.error(f"[Groq] sugerir_categoria error: {e}")
+            return {"match": False, "categoria": None}
 
 
 gemini_service = GeminiService()

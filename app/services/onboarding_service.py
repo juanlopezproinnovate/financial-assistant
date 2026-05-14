@@ -58,6 +58,36 @@ SUB_PASO_PRECIO    = "precio"
 SUB_PASO_STOCK     = "stock"
 SUB_PASO_ETIQUETA  = "etiqueta"
 SUB_PASO_CONTINUAR = "continuar"
+SUB_PASO_CONFIRMAR = "confirmar"
+
+def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: list[str]) -> str:
+    """Arma el mensaje de resumen + categoría + solicitud de confirmación."""
+    etiqueta_linea = f"🏷️ Etiqueta: {producto['etiqueta']}\n" if producto.get("etiqueta") else ""
+
+    if sugerencia.get("match"):
+        cat_linea = f"📂 Categoría: *{sugerencia['categoria']}* ✅\n"
+        cat_instruccion = ""
+    else:
+        cat_linea = "📂 Categoría: _ninguna coincide_\n"
+        cats_txt = ", ".join(categorias) if categorias else "—"
+        cat_instruccion = (
+            f"\n¿Quieres asignarle una categoría?\n"
+            f"Categorías disponibles: _{cats_txt}_\n"
+            f"Escribe *categoría NombreExistente* o *categoría NombreNuevo* para crear una.\n"
+            f"O escribe *sí* para guardar sin categoría.\n\n"
+        )
+
+    return (
+        f"¿Confirmas estos datos?\n\n"
+        f"📝 Producto: *{producto['nombre']}*\n"
+        f"📐 Talla: {producto['talla']}\n"
+        f"💰 Precio: S/ {producto['precio_venta']:.2f}\n"
+        f"📦 Stock: {producto['cantidad']} unidades\n"
+        f"{etiqueta_linea}"
+        f"{cat_linea}"
+        f"{cat_instruccion}"
+        f"✅ Escribe *sí* para guardar · ✏️ Escribe *no* para corregir"
+    )
 
 
 class OnboardingService:
@@ -146,6 +176,16 @@ class OnboardingService:
                 """,
                 negocio_id,
             )
+
+    async def _leer_categorias_negocio(self, negocio_id: str) -> list[str]:
+        """Retorna lista de nombres de categorías activas del negocio."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT nombre FROM categorias WHERE negocio_id = $1 AND activa = true",
+                negocio_id,
+            )
+        return [row["nombre"] for row in rows]
 
     # ──────────────────────────────────────────────
     #  QUERIES — categorias_plantilla (caché IA)
@@ -821,37 +861,12 @@ class OnboardingService:
                     producto_actual["precio_venta"] = campos["precio"]
                 if campos.get("cantidad") is not None:
                     producto_actual["cantidad"] = campos["cantidad"]
-                # etiqueta puede llegar como None explícito (omisión) o string
                 if "etiqueta" in campos:
                     producto_actual["etiqueta"] = campos["etiqueta"]
 
                 datos_temp["inv_producto_actual"] = producto_actual
 
-                # ── Todos los obligatorios presentes → guardar ──
-                if (
-                    producto_actual.get("nombre")
-                    and producto_actual.get("talla")
-                    and producto_actual.get("precio_venta") is not None
-                    and producto_actual.get("cantidad") is not None
-                ):
-                    # Si etiqueta no vino en el mensaje, preguntar
-                    if "etiqueta" not in campos:
-                        datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
-                        await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                        return (
-                            f"*{producto_actual['nombre']}* · talla {producto_actual['talla']} · "
-                            f"S/ {producto_actual['precio_venta']:.2f} · {producto_actual['cantidad']} uds ✅\n\n"
-                            "🏷️ ¿Le pones una *etiqueta* para reconocerlo fácil?\n"
-                            "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
-                        )
-                    etiqueta = producto_actual.get("etiqueta")
-                    return await self._guardar_y_confirmar_producto(
-                        negocio_id, datos_temp, producto_actual, etiqueta, productos_count
-                    )
-
-                # ── Faltan campos → pedir solo lo que falta ──
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-
+                # ── Faltan campos obligatorios → pedir solo lo que falta ──
                 if not producto_actual.get("nombre"):
                     datos_temp["inv_sub_paso"] = "nombre_faltante"
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
@@ -884,6 +899,27 @@ class OnboardingService:
                         "📦 ¿Cuántas *unidades* tienes en stock ahora?\n"
                         "_(Ej: 10, 25 — escribe 0 si aún no tienes)_"
                     )
+
+                # ── Si etiqueta no vino → preguntar ──
+                if "etiqueta" not in campos:
+                    datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"*{producto_actual['nombre']}* · talla {producto_actual['talla']} · "
+                        f"S/ {producto_actual['precio_venta']:.2f} · {producto_actual['cantidad']} uds ✅\n\n"
+                        "🏷️ ¿Le pones una *etiqueta* para reconocerlo fácil?\n"
+                        "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
+                    )
+
+                # ── Todos los campos listos → sugerir categoría y pedir confirmación ──
+                categorias = await self._leer_categorias_negocio(negocio_id)
+                sugerencia = await gemini_service.sugerir_categoria_producto(
+                    producto_actual["nombre"], categorias
+                )
+                datos_temp["inv_categoria_sugerida"] = sugerencia.get("categoria")
+                datos_temp["inv_sub_paso"] = SUB_PASO_CONFIRMAR
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return _armar_mensaje_confirmacion(producto_actual, sugerencia, categorias)
 
             # ── Sub-paso: talla (fallback individual) ──
             elif sub_paso == SUB_PASO_TALLA:
@@ -957,9 +993,99 @@ class OnboardingService:
                 etiqueta = None if self._es_omision(mensaje) else mensaje.strip()
                 producto_actual["etiqueta"] = etiqueta
                 datos_temp["inv_producto_actual"] = producto_actual
-                return await self._guardar_y_confirmar_producto(
-                    negocio_id, datos_temp, producto_actual, etiqueta, productos_count
+
+                # ── Sugerir categoría y pedir confirmación ──
+                categorias = await self._leer_categorias_negocio(negocio_id)
+                sugerencia = await gemini_service.sugerir_categoria_producto(
+                    producto_actual["nombre"], categorias
                 )
+                datos_temp["inv_categoria_sugerida"] = sugerencia.get("categoria")
+                datos_temp["inv_sub_paso"] = SUB_PASO_CONFIRMAR
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                return _armar_mensaje_confirmacion(producto_actual, sugerencia, categorias)
+
+            # ── Sub-paso: confirmación del resumen + categoría ──
+            elif sub_paso == SUB_PASO_CONFIRMAR:
+                confirmado = self._detectar_confirmacion(msg_lower)
+                quiere_corregir = any(p in msg_lower for p in ["no", "corregir", "cambiar", "error", "mal"])
+                quiere_nueva_cat = msg_lower.startswith("categoría ") or msg_lower.startswith("categoria ")
+
+                if quiere_nueva_cat:
+                    # Extraer nombre de la nueva categoría
+                    nueva_cat = mensaje.strip().split(" ", 1)[1].strip().title()
+                    # Guardarla en BD
+                    await self.guardar_categorias_negocio(
+                        negocio_id,
+                        (await self._leer_categorias_negocio(negocio_id)) + [nueva_cat],
+                    )
+                    datos_temp["inv_categoria_sugerida"] = nueva_cat
+                    producto_actual["categoria"] = nueva_cat
+                    datos_temp["inv_producto_actual"] = producto_actual
+                    # Volver a mostrar confirmación con la nueva categoría
+                    datos_temp["inv_sub_paso"] = SUB_PASO_CONFIRMAR
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    sugerencia = {"match": True, "categoria": nueva_cat}
+                    return (
+                        f"✅ Categoría *{nueva_cat}* creada.\n\n"
+                        + _armar_mensaje_confirmacion(producto_actual, sugerencia, [])
+                    )
+
+                elif quiere_corregir:
+                    # Reiniciar producto actual y volver a pedir
+                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
+                    datos_temp["inv_producto_actual"] = {}
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        "Sin problema, ingresa los datos nuevamente 😊\n\n"
+                        + self._mensaje_plantilla_producto(productos_count + 1)
+                    )
+
+                elif confirmado:
+                    etiqueta = producto_actual.get("etiqueta")
+                    categoria_nombre = datos_temp.get("inv_categoria_sugerida")
+                    # Insertar con la categoría resuelta
+                    try:
+                        await self.insertar_producto_con_stock(
+                            negocio_id=negocio_id,
+                            nombre=producto_actual["nombre"],
+                            talla=producto_actual["talla"],
+                            precio_venta=producto_actual["precio_venta"],
+                            cantidad=producto_actual["cantidad"],
+                            etiqueta=etiqueta,
+                            categoria_nombre=categoria_nombre,
+                        )
+                        productos_count += 1
+                        datos_temp["inv_productos_cargados"] = productos_count
+                    except Exception as e:
+                        logger.error(f"[Onboarding] Error al guardar producto: {e}")
+                        return "⚠️ Hubo un problema al guardar. Escribe el nombre del producto para intentar de nuevo."
+
+                    etiqueta_linea = f"🏷️ Etiqueta: {etiqueta}\n" if etiqueta else ""
+                    cat_linea = f"📂 Categoría: {categoria_nombre}\n" if categoria_nombre else ""
+                    progreso = "📦 Has cargado tu inventario inicial correctamente 🎉\n\n" if productos_count == 1 else f"Llevas *{productos_count}* producto(s) cargado(s) 🎉\n\n"
+
+                    datos_temp["inv_producto_actual"] = {}
+                    datos_temp["inv_sub_paso"] = SUB_PASO_CONTINUAR
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+
+                    return (
+                        f"✅ *{producto_actual['nombre']}* guardado\n\n"
+                        f"📐 Talla: {producto_actual['talla']}\n"
+                        f"💰 Precio: S/ {producto_actual['precio_venta']:.2f}\n"
+                        f"📦 Stock: {producto_actual['cantidad']} unidades\n"
+                        f"{etiqueta_linea}"
+                        f"{cat_linea}\n"
+                        f"{progreso}"
+                        "¿Qué hacemos?\n"
+                        "➕ Escribe *otro* para agregar más\n"
+                        "✅ Escribe *listo* para continuar"
+                    )
+                else:
+                    return (
+                        "Escribe *sí* para confirmar y guardar, "
+                        "*no* para corregir los datos, o "
+                        "*categoría NombreNueva* para crear una categoría nueva."
+                    )
 
             # ── Sub-paso: continuar o terminar ──
             elif sub_paso == SUB_PASO_CONTINUAR:
