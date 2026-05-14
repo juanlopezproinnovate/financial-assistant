@@ -716,12 +716,10 @@ class OnboardingService:
 
             lista = self._formatear_lista_categorias(categorias)
             return (
-                f"Genial 👗 Para *{tipo_ropa}* te sugiero estas categorías de inventario:\n\n"
+                f"Para organizar mejor tu negocio, "
+                f"te recomiendo empezar con estas categorías 👗\n\n"
                 f"{lista}\n\n"
-                "Puedes:\n"
-                "➕ *Agregar* escribiendo: _agregar Shorts_\n"
-                "➖ *Quitar* escribiendo: _quitar 3_ (el número)\n"
-                "✅ Escribe *listo* cuando estén perfectas"
+                "¿Las dejamos así o quieres quitar/agregar algo?"
             )
 
         # ══════════════════════════════════════════
@@ -729,63 +727,126 @@ class OnboardingService:
         # ══════════════════════════════════════════
         elif estado == "onboarding_5":
             categorias = datos_temp.get("categorias_propuestas", [])
-            msg_lower = mensaje.strip().lower()
+            ya_hizo_cambios = datos_temp.get("categorias_editadas", False)
 
-            # ── Confirmación ──
-            if self._detectar_confirmacion(msg_lower):
+            # ── Interpretar intención con mini-prompt de IA ──
+            interpretacion = await gemini_service.interpretar_accion_categoria(
+                mensaje=mensaje,
+                categorias_actuales=categorias,
+            )
+            accion = interpretacion.get("accion", "DESCONOCIDO")
+            valor  = interpretacion.get("valor")
+
+            logger.info(
+                f"[Onboarding5] accion={accion} valor={valor!r} "
+                f"confianza={interpretacion.get('confianza')}"
+            )
+
+            # ── CONFIRMAR: guardar y pasar al siguiente paso ──
+            if accion == "CONFIRMAR":
                 await self.guardar_categorias_negocio(negocio_id, categorias)
-                await self.upsert_sesion(negocio_id, "onboarding_5b", datos_temp)
+                await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
                 return (
-                    "¡Perfecto! 📦 Categorías guardadas.\n\n"
-                    "¿Quieres cargar tu inventario ahora?\n\n"
-                    "1️⃣ *Sí, ahora* — te guío producto a producto\n"
-                    "2️⃣ *Después* — lo iré registrando mientras vendo\n"
-                    "3️⃣ *Dashboard* — lo cargo con calma desde la web"
+                    "¡Perfecto! ✅ Tus categorías quedaron guardadas.\n\n"
+                    "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
+                    "_(Ej: 8pm, 20:00, 9 de la noche)_"
                 )
 
-            # ── Agregar categoría ──
-            if msg_lower.startswith("agregar "):
-                nueva = mensaje[8:].strip().title()
-                if nueva and nueva not in categorias:
+            # ── AGREGAR: añadir categoría genérica ──
+            if accion == "AGREGAR" and valor:
+                nueva = str(valor).strip().title()
+                if nueva not in categorias:
                     categorias.append(nueva)
-                datos_temp["categorias_propuestas"] = categorias
-                await self.upsert_sesion(negocio_id, "onboarding_5", datos_temp)
-                lista = self._formatear_lista_categorias(categorias)
-                return (
-                    f"✅ *{nueva}* agregada.\n\n"
-                    f"{lista}\n\n"
-                    "Escribe *listo* para confirmar o sigue ajustando."
-                )
+                    datos_temp["categorias_propuestas"] = categorias
+                    datos_temp["categorias_editadas"] = True
+                    await self.upsert_sesion(negocio_id, "onboarding_5", datos_temp)
+                    lista = self._formatear_lista_categorias(categorias)
+                    return (
+                        f"✅ *{nueva}* agregada 👗\n\n"
+                        f"{lista}\n\n"
+                        "¿Algún otro cambio o seguimos?"
+                    )
+                else:
+                    lista = self._formatear_lista_categorias(categorias)
+                    return (
+                        f"*{nueva}* ya está en la lista 😊\n\n"
+                        f"{lista}\n\n"
+                        "¿Algún otro cambio o seguimos?"
+                    )
 
-            # ── Quitar por número ──
-            if msg_lower.startswith("quitar "):
-                numero_str = mensaje[7:].strip()
-                if numero_str.isdigit():
-                    idx = int(numero_str) - 1
+            # ── QUITAR: eliminar por número o nombre ──
+            if accion == "QUITAR" and valor is not None:
+                if isinstance(valor, int):
+                    idx = valor - 1
                     if 0 <= idx < len(categorias):
                         eliminada = categorias.pop(idx)
                         datos_temp["categorias_propuestas"] = categorias
+                        datos_temp["categorias_editadas"] = True
                         await self.upsert_sesion(negocio_id, "onboarding_5", datos_temp)
                         lista = self._formatear_lista_categorias(categorias)
                         return (
-                            f"🗑️ *{eliminada}* eliminada.\n\n"
+                            f"🗑️ *{eliminada}* quitada.\n\n"
                             f"{lista}\n\n"
-                            "Escribe *listo* para confirmar o sigue ajustando."
+                            "¿Algún otro cambio o seguimos?"
                         )
                     else:
-                        return f"⚠️ No existe el número {numero_str}. Elige entre 1 y {len(categorias)}."
+                        return (
+                            f"⚠️ No existe el número {valor}. "
+                            f"Elige entre 1 y {len(categorias)}."
+                        )
                 else:
-                    return "⚠️ Para quitar escribe el *número* de la categoría. Ej: _quitar 2_"
+                    # Intentar quitar por nombre
+                    nombre_buscar = str(valor).strip().lower()
+                    idx_encontrado = next(
+                        (i for i, c in enumerate(categorias) if c.lower() == nombre_buscar),
+                        None,
+                    )
+                    if idx_encontrado is not None:
+                        eliminada = categorias.pop(idx_encontrado)
+                        datos_temp["categorias_propuestas"] = categorias
+                        datos_temp["categorias_editadas"] = True
+                        await self.upsert_sesion(negocio_id, "onboarding_5", datos_temp)
+                        lista = self._formatear_lista_categorias(categorias)
+                        return (
+                            f"🗑️ *{eliminada}* quitada.\n\n"
+                            f"{lista}\n\n"
+                            "¿Algún otro cambio o seguimos?"
+                        )
+                    else:
+                        lista = self._formatear_lista_categorias(categorias)
+                        return (
+                            f"⚠️ No encontré esa categoría en la lista.\n\n"
+                            f"{lista}\n\n"
+                            "Dime el *número* de la que quieres quitar 😊"
+                        )
 
-            # ── Mensaje no reconocido ──
+            # ── PRODUCTO: el usuario confundió categoría con producto ──
+            if accion == "PRODUCTO":
+                lista = self._formatear_lista_categorias(categorias)
+                return (
+                    "¡Qué buena onda! 😊 Más adelante vas a poder agregar ese producto "
+                    "con todos sus detalles (talla, precio, stock...).\n\n"
+                    "Por ahora solo definimos las *categorías* para clasificar tu ropa, "
+                    "que son nombres generales como Blusas, Jeans o Shorts.\n\n"
+                    f"Tu lista por ahora es:\n{lista}\n\n"
+                    "¿Seguimos editando o quedan estas categorías?"
+                )
+
+            # ── DESCONOCIDO: ayuda contextual ──
             lista = self._formatear_lista_categorias(categorias)
+            if ya_hizo_cambios:
+                return (
+                    f"Estas son tus categorías actuales 👗\n\n"
+                    f"{lista}\n\n"
+                    "¿Algún otro cambio o seguimos?"
+                )
             return (
-                f"No entendí bien 😅 Estas son tus categorías actuales:\n\n"
+                f"No entendí bien 😅 Aquí está la lista actual:\n\n"
                 f"{lista}\n\n"
-                "Puedes escribir:\n"
-                "➕ _agregar NombreCategoria_\n"
-                "➖ _quitar N_ (el número)\n"
-                "✅ *listo* para confirmar"
+                "Puedes decirme, por ejemplo:\n"
+                "➕ \"agregar Shorts\"\n"
+                "➖ \"quitar 3\"\n"
+                "✅ \"listo\" cuando estén perfectas"
             )
 
         # ══════════════════════════════════════════
