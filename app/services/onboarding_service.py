@@ -742,14 +742,16 @@ class OnboardingService:
                 f"confianza={interpretacion.get('confianza')}"
             )
 
-            # ── CONFIRMAR: guardar y pasar al siguiente paso ──
+            # ── CONFIRMAR: guardar y preguntar por inventario ──
             if accion == "CONFIRMAR":
                 await self.guardar_categorias_negocio(negocio_id, categorias)
-                await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
+                await self.upsert_sesion(negocio_id, "onboarding_5b", datos_temp)
                 return (
-                    "¡Perfecto! ✅ Tus categorías quedaron guardadas.\n\n"
-                    "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
-                    "_(Ej: 8pm, 20:00, 9 de la noche)_"
+                    "¡Perfecto! 📦 Categorías guardadas.\n\n"
+                    "¿Quieres cargar tu inventario ahora?\n\n"
+                    "1️⃣ *Sí, ahora* — te guío producto a producto\n"
+                    "2️⃣ *Después* — lo iré registrando mientras vendo\n"
+                    "3️⃣ *Dashboard* — lo cargo con calma desde la web"
                 )
 
             # ── AGREGAR: añadir categoría genérica ──
