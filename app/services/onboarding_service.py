@@ -773,8 +773,17 @@ class OnboardingService:
                 return self._mensaje_plantilla_producto(1)
 
             elif cargar_despues:
-                # Saltar directamente al paso 6
+                # Detectar si eligió dashboard (opción 3) o después (opción 2)
+                es_dashboard = any(p in msg_lower for p in ["3", "dashboard", "web"])
                 await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
+
+                if es_dashboard:
+                    return (
+                        "¡Perfecto! 🖥️ Puedes cargar tu inventario completo desde aquí:\n\n"
+                        "👉 http://bit.ly/4dIQAVB\n\n"
+                        "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
+                        "_(Ej: 8pm, 20:00, 9 de la noche)_"
+                    )
                 return (
                     "Sin problema, puedes cargarlo cuando quieras 😊\n\n"
                     "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
@@ -801,74 +810,49 @@ class OnboardingService:
 
             # ── Sub-paso: parsear respuesta del formulario completo ──
             if sub_paso == SUB_PASO_COMPLETO:
+                # ── LLM extrae todos los campos del mensaje libre ──
+                campos = await gemini_service.extraer_producto_inventario(mensaje)
 
-                texto = mensaje.strip()
-
-                # heurística rápida: si no viene con etiquetas pero parece frase
-                if ":" not in texto:
-                    partes = texto.lower()
-
-                    # nombre (todo antes de "talla" o "precio")
-                    if "talla" in partes:
-                        nombre = partes.split("talla")[0].strip()
-                        producto_actual["nombre"] = nombre.title()
-
-                    if "talla" in partes:
-                        import re
-                        m = re.search(r"talla\s*([a-z0-9]+)", partes)
-                        if m:
-                            producto_actual["talla"] = m.group(1).upper()
-
-                    if "precio" in partes:
-                        producto_actual["precio_venta"] = self._parsear_precio(partes)
-
-                    match = re.search(r"(stock|tengo)\D*(\d+)", partes)
-                    if match:
-                        producto_actual["cantidad"] = int(match.group(2))
-                    
-                campos = self._parsear_formulario_producto(mensaje)
-
-                # Guardar lo que llegó en producto_actual
-                if "nombre" in campos and campos["nombre"]:
-                    producto_actual["nombre"] = campos["nombre"].title()
-                if "talla" in campos and campos["talla"]:
-                    producto_actual["talla"] = campos["talla"].upper()
-                if "precio" in campos and campos["precio"]:
+                if campos.get("nombre"):
+                    producto_actual["nombre"] = campos["nombre"]
+                if campos.get("talla"):
+                    producto_actual["talla"] = campos["talla"]
+                if campos.get("precio") is not None:
                     producto_actual["precio_venta"] = campos["precio"]
-                # 1. intentar detectar contexto primero
-                match = re.search(r"(stock|tengo|hay|quedan|me quedan)\D*(\d+)", partes)
-
-                if match:
-                    producto_actual["cantidad"] = int(match.group(2))
-                else:
-                    # 2. fallback: tomar el último número del mensaje
-                    numeros = re.findall(r"\d+", partes)
-
-                    if numeros:
-                        if len(numeros) > 1:
-                            producto_actual["cantidad"] = int(numeros[-1])
-                        else:
-                            producto_actual["cantidad"] = int(numeros[0])
-                # etiqueta puede ser None explícito (omisión)
+                if campos.get("cantidad") is not None:
+                    producto_actual["cantidad"] = campos["cantidad"]
+                # etiqueta puede llegar como None explícito (omisión) o string
                 if "etiqueta" in campos:
                     producto_actual["etiqueta"] = campos["etiqueta"]
 
                 datos_temp["inv_producto_actual"] = producto_actual
 
+                # ── Todos los obligatorios presentes → guardar ──
                 if (
                     producto_actual.get("nombre")
                     and producto_actual.get("talla")
-                    and producto_actual.get("precio_venta")
+                    and producto_actual.get("precio_venta") is not None
                     and producto_actual.get("cantidad") is not None
                 ):
+                    # Si etiqueta no vino en el mensaje, preguntar
+                    if "etiqueta" not in campos:
+                        datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
+                        await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                        return (
+                            f"*{producto_actual['nombre']}* · talla {producto_actual['talla']} · "
+                            f"S/ {producto_actual['precio_venta']:.2f} · {producto_actual['cantidad']} uds ✅\n\n"
+                            "🏷️ ¿Le pones una *etiqueta* para reconocerlo fácil?\n"
+                            "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
+                        )
                     etiqueta = producto_actual.get("etiqueta")
                     return await self._guardar_y_confirmar_producto(
                         negocio_id, datos_temp, producto_actual, etiqueta, productos_count
                     )
 
-                # ── Determinar qué falta y pedir solo eso ──
+                # ── Faltan campos → pedir solo lo que falta ──
+                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+
                 if not producto_actual.get("nombre"):
-                    datos_temp["inv_sub_paso"] = SUB_PASO_TALLA  # usamos talla como proxy para re-pedir nombre
                     datos_temp["inv_sub_paso"] = "nombre_faltante"
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                     return (
@@ -876,7 +860,6 @@ class OnboardingService:
                         "📝 ¿Cómo se llama el producto?\n"
                         "_(Ej: Polo básico, Jean slim, Blusa floral)_"
                     )
-
                 if not producto_actual.get("talla"):
                     datos_temp["inv_sub_paso"] = SUB_PASO_TALLA
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
@@ -885,8 +868,7 @@ class OnboardingService:
                         "📐 ¿Qué *talla* tiene?\n"
                         "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
                     )
-
-                if not producto_actual.get("precio_venta"):
+                if producto_actual.get("precio_venta") is None:
                     datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                     return (
@@ -894,7 +876,6 @@ class OnboardingService:
                         "💰 ¿Cuál es el *precio de venta* en Soles?\n"
                         "_(Ej: 35, 49.90, 120)_"
                     )
-
                 if producto_actual.get("cantidad") is None:
                     datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
@@ -903,24 +884,6 @@ class OnboardingService:
                         "📦 ¿Cuántas *unidades* tienes en stock ahora?\n"
                         "_(Ej: 10, 25 — escribe 0 si aún no tienes)_"
                     )
-
-                # ── Todos los campos obligatorios presentes → guardar ──
-                etiqueta = producto_actual.get("etiqueta")  # puede ser None
-                # Si etiqueta no fue mencionada en el formulario, preguntar
-                if "etiqueta" not in campos:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"*{producto_actual['nombre']}* · talla {producto_actual['talla']} · "
-                        f"S/ {producto_actual['precio_venta']:.2f} · {producto_actual['cantidad']} uds ✅\n\n"
-                        "🏷️ ¿Le pones una *etiqueta* para reconocerlo fácil?\n"
-                        "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
-                    )
-
-                # Tiene todo → insertar
-                return await self._guardar_y_confirmar_producto(
-                    negocio_id, datos_temp, producto_actual, etiqueta, productos_count
-                )
 
             # ── Sub-paso: talla (fallback individual) ──
             elif sub_paso == SUB_PASO_TALLA:

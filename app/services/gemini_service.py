@@ -607,6 +607,84 @@ No incluyas texto adicional ni markdown."""
         except Exception as e:
             logger.error(f"[Groq] generar_categorias error: {e}")
             return {"categorias": fallback}
+    
+    async def extraer_producto_inventario(self, mensaje: str) -> dict:
+        """
+        Dado un mensaje en lenguaje libre, extrae los datos de un producto
+        para carga de inventario durante el onboarding.
+        Retorna dict con claves: nombre, talla, precio, cantidad, etiqueta
+        (los que no se mencionen llegan como None).
+        """
+        prompt = (
+            f'Un comerciante de ropa en Tacna escribió esto para registrar un producto:\n'
+            f'"{mensaje}"\n\n'
+            f'Extrae los datos y responde SOLO con JSON válido, sin texto adicional:\n'
+            f'{{\n'
+            f'  "nombre": "nombre del producto capitalizado, ej: Polo Básico",\n'
+            f'  "talla": "talla en mayúsculas, ej: M, XL, 28, TALLA ÚNICA",\n'
+            f'  "precio": número decimal o null,\n'
+            f'  "cantidad": número entero o null,\n'
+            f'  "etiqueta": "etiqueta corta o null si no se menciona o dice no"\n'
+            f'}}\n\n'
+            f'Reglas:\n'
+            f'- nombre: capitaliza cada palabra. Si no se menciona → null.\n'
+            f'- talla: siempre en MAYÚSCULAS. Si no se menciona → null.\n'
+            f'- precio: solo el número, sin símbolo de moneda. Si no se menciona → null.\n'
+            f'- cantidad: solo el número entero. Si no se menciona → null.\n'
+            f'- etiqueta: si el usuario escribe "no", "ninguna", "sin etiqueta" → null.\n'
+            f'- Si el mensaje mezcla precio y cantidad, el precio suele ser mayor.\n'
+            f'Ejemplos:\n'
+            f'"polo azul M precio 35 stock 10" → {{"nombre":"Polo Azul","talla":"M","precio":35.0,"cantidad":10,"etiqueta":null}}\n'
+            f'"blusa floral talla S a 49.90 tengo 5 etiqueta verano24" → {{"nombre":"Blusa Floral","talla":"S","precio":49.90,"cantidad":5,"etiqueta":"verano24"}}\n'
+            f'"jean slim 28 25 soles 8 unidades" → {{"nombre":"Jean Slim","talla":"28","precio":25.0,"cantidad":8,"etiqueta":null}}'
+        )
+        fallback = {"nombre": None, "talla": None, "precio": None, "cantidad": None, "etiqueta": None}
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Eres un extractor de datos de productos de ropa. "
+                            "Responde SOLO con JSON válido, sin texto adicional ni markdown."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=128,
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
+            resultado = json.loads(raw)
+
+            # Normalizar tipos por seguridad
+            if resultado.get("precio") is not None:
+                resultado["precio"] = float(resultado["precio"])
+            if resultado.get("cantidad") is not None:
+                resultado["cantidad"] = int(resultado["cantidad"])
+            if isinstance(resultado.get("talla"), str):
+                resultado["talla"] = resultado["talla"].upper()
+            if isinstance(resultado.get("nombre"), str):
+                resultado["nombre"] = resultado["nombre"].strip().title()
+            if isinstance(resultado.get("etiqueta"), str):
+                if self._es_omision_etiqueta(resultado["etiqueta"]):
+                    resultado["etiqueta"] = None
+
+            logger.info(f"[Groq] extraer_producto_inventario → {resultado}")
+            return resultado
+
+        except json.JSONDecodeError as e:
+            logger.error(f"[Groq] extraer_producto_inventario JSON inválido: {e}")
+            return fallback
+        except Exception as e:
+            logger.error(f"[Groq] extraer_producto_inventario error: {e}")
+            return fallback
+
+    def _es_omision_etiqueta(self, texto: str) -> bool:
+        omisiones = {"no", "ninguno", "ninguna", "omitir", "saltar", "-", "n/a", "nada", "sin etiqueta"}
+        return texto.strip().lower() in omisiones
 
 
 gemini_service = GeminiService()
