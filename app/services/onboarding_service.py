@@ -966,7 +966,7 @@ class OnboardingService:
                     )
 
                 # ── LLM extrae todos los campos del mensaje libre ──
-                campos = await gemini_service.extraer_producto_inventario(mensaje)
+                campos = await gemini_service.extraer_producto_inventario(mensaje, producto_actual)
 
                 if campos.get("nombre"):
                     producto_actual["nombre"] = campos["nombre"]
@@ -1049,17 +1049,40 @@ class OnboardingService:
                         + _armar_mensaje_confirmacion(producto_actual, sugerencia, [])
                     )
 
-                interpretacion = await gemini_service.interpretar_accion_inventario(mensaje)
+                producto_para_ia = producto_actual.copy()
+                producto_para_ia["categoria"] = datos_temp.get("inv_categoria_sugerida")
+
+                interpretacion = await gemini_service.interpretar_accion_inventario(mensaje, producto_para_ia)
                 accion = interpretacion.get("accion", "DESCONOCIDO")
 
-                if accion == "CORREGIR":
-                    # Reiniciar producto actual y volver a pedir
-                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
-                    datos_temp["inv_producto_actual"] = {}
+                if accion == "EDITAR":
+                    cambios = interpretacion.get("cambios", {})
+                    # Si no extrajo ningún cambio específico, preguntar qué quiere cambiar
+                    if not any(v is not None for v in cambios.values()):
+                        return "Dime, ¿qué dato quieres cambiar? (Por ejemplo: 'cambia el precio a 20' o 'edita la categoría a Polos')"
+
+                    # Aplicar cambios
+                    if cambios.get("nombre"): producto_actual["nombre"] = cambios["nombre"]
+                    if cambios.get("talla") is not None: producto_actual["talla"] = cambios["talla"] if cambios["talla"] else ""
+                    if cambios.get("cantidad") is not None: producto_actual["cantidad"] = cambios["cantidad"]
+                    if cambios.get("precio_venta") is not None: producto_actual["precio_venta"] = cambios["precio_venta"]
+                    if cambios.get("precio_compra") is not None: producto_actual["precio_compra"] = cambios["precio_compra"]
+                    
+                    if cambios.get("categoria"):
+                        nueva_cat = cambios["categoria"]
+                        await self.guardar_categorias_negocio(
+                            negocio_id,
+                            (await self._leer_categorias_negocio(negocio_id)) + [nueva_cat],
+                        )
+                        datos_temp["inv_categoria_sugerida"] = nueva_cat
+
+                    datos_temp["inv_producto_actual"] = producto_actual
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+
+                    sugerencia = {"match": True, "categoria": datos_temp["inv_categoria_sugerida"]} if datos_temp.get("inv_categoria_sugerida") else {"match": False}
                     return (
-                        "Sin problema, ingresa los datos nuevamente 😊\n\n"
-                        + self._mensaje_plantilla_producto(productos_count + 1)
+                        f"✅ ¡Listo! Datos actualizados.\n\n"
+                        + _armar_mensaje_confirmacion(producto_actual, sugerencia, [])
                     )
                 
                 elif accion in ["TERMINAR", "AGREGAR_OTRO"]:

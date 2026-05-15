@@ -642,17 +642,26 @@ No incluyas texto adicional ni markdown."""
             logger.error(f"[Groq] generar_categorias error: {e}")
             return {"categorias": fallback}
     
-    async def extraer_producto_inventario(self, mensaje: str) -> dict:
+    async def extraer_producto_inventario(self, mensaje: str, producto_actual: dict = None) -> dict:
         """
         Dado un mensaje en lenguaje libre, extrae los datos de un producto
         para carga de inventario durante el onboarding.
         Retorna dict con claves: nombre, talla, precio_venta, precio_compra, cantidad
         (los que no se mencionen llegan como None).
         """
+        contexto_txt = ""
+        if producto_actual:
+            contexto_txt = (
+                f"El usuario está completando paso a paso los datos de un producto.\n"
+                f"Actualmente tenemos:\n{json.dumps(producto_actual, indent=2)}\n"
+                f"Los campos en null son los que faltan. Si el usuario envía un texto corto (ej: 'L', '20'), asúmelo para el próximo campo faltante lógico.\n\n"
+            )
+
         prompt = (
+            f'{contexto_txt}'
             f'Un comerciante de ropa en Tacna escribió esto para registrar un producto:\n'
             f'"{mensaje}"\n\n'
-            f'Extrae los datos y responde SOLO con JSON válido, sin texto adicional:\n'
+            f'Extrae los datos mencionados en el mensaje y responde SOLO con JSON válido, sin texto adicional:\n'
             f'{{\n'
             f'  "nombre": "nombre del producto capitalizado, ej: Polo Básico",\n'
             f'  "talla": "talla en mayúsculas, ej: M, XL, 28, TALLA ÚNICA",\n'
@@ -668,7 +677,8 @@ No incluyas texto adicional ni markdown."""
             f'- precio_compra: solo el número (precio de costo). Si no se menciona → null.\n'
             f'Ejemplos:\n'
             f'"Polo manga corta, Talla XL, stock 50, precio de venta 50, precio de compra 30" → {{"nombre":"Polo Manga Corta","talla":"XL","cantidad":50,"precio_venta":50.0,"precio_compra":30.0}}\n'
-            f'"Jean slim 28 25 soles 8 unidades" → {{"nombre":"Jean Slim","talla":"28","cantidad":8,"precio_venta":25.0,"precio_compra":null}}'
+            f'"Jean slim 28 25 soles 8 unidades" → {{"nombre":"Jean Slim","talla":"28","cantidad":8,"precio_venta":25.0,"precio_compra":null}}\n'
+            f'Si el mensaje es "L" y falta la talla → {{"nombre":null,"talla":"L","cantidad":null,"precio_venta":null,"precio_compra":null}}'
         )
         fallback = {"nombre": None, "talla": None, "cantidad": None, "precio_venta": None, "precio_compra": None}
         try:
@@ -875,45 +885,93 @@ REGLAS:
                 nums = re.findall(r"\d+", msg)
                 return {"accion": "QUITAR", "valor": int(nums[0]) if nums else None, "confianza": "baja"}
             return {"accion": "DESCONOCIDO", "valor": None, "confianza": "baja"}
-    async def interpretar_accion_inventario(self, mensaje: str) -> dict:
+    async def interpretar_accion_inventario(self, mensaje: str, producto_actual: dict) -> dict:
         """
         Mini-prompt para interpretar la respuesta del usuario tras confirmar un producto en onboarding.
-        Retorna la acción: 'TERMINAR', 'AGREGAR_OTRO', 'CORREGIR', 'DESCONOCIDO'
+        Retorna la acción: 'TERMINAR', 'AGREGAR_OTRO', 'EDITAR', 'DESCONOCIDO'
+        Si es EDITAR, también retorna un diccionario 'cambios' con los campos a actualizar.
         """
-        prompt = f"""El bot acaba de confirmar un producto cargado al inventario.
+        producto_txt = (
+            f"Nombre: {producto_actual.get('nombre', '?')}\n"
+            f"Talla: {producto_actual.get('talla', '(no especificada)')}\n"
+            f"Stock: {producto_actual.get('cantidad', '(no especificado)')}\n"
+            f"Precio de Venta: {producto_actual.get('precio_venta', '?')}\n"
+            f"Precio de Compra: {producto_actual.get('precio_compra', '(no especificado)')}\n"
+            f"Categoría: {producto_actual.get('categoria', '(no especificada)')}"
+        )
+        prompt = f"""El bot acaba de confirmar este producto cargado al inventario:
+{producto_txt}
+
 El usuario responde: "{mensaje}"
 
 Clasifica su intención en UNA de estas acciones:
-TERMINAR → Señales: "todo bien", "sí", "queda", "listo", "está bien", "ok", "ya", "terminé", "siguiente fase", "pasar a la siguiente".
-AGREGAR_OTRO → Señales: "otro", "quiero agregar otro", "más", "uno más", "agrega otro", "sí, otro", "agregar esto".
-CORREGIR → Señales: "editar", "mal", "error", "no", "corregir", "cambiar".
-DESCONOCIDO → No se puede determinar.
+TERMINAR → Quiere guardar el producto y TERMINAR el proceso de inventario. (Señales: "todo bien", "sí", "queda", "listo", "terminé", "ya", "terminar el inventario")
+AGREGAR_OTRO → Quiere guardar el producto y AGREGAR OTRO nuevo. (Señales: "otro", "quiero agregar otro", "más", "uno más", "sí, otro", "agregar otro")
+EDITAR → Quiere cambiar uno o más campos del producto actual o dice que algo está mal. (Señales: "editar", "mal", "no", "cambiar", "ponle", "la categoría es", "edita")
 
-Responde ÚNICAMENTE con JSON válido:
-{{"accion": "TERMINAR|AGREGAR_OTRO|CORREGIR|DESCONOCIDO"}}"""
+Si la acción es EDITAR, extrae los nuevos valores mencionados.
+
+Responde ÚNICAMENTE con JSON válido en este formato:
+{{"accion": "TERMINAR|AGREGAR_OTRO|EDITAR|DESCONOCIDO", "cambios": {{"nombre": null, "talla": null, "cantidad": null, "precio_venta": null, "precio_compra": null, "categoria": null}}}}
+
+Reglas para EDITAR:
+- Solo incluye en "cambios" los campos que el usuario explícitamente mencionó cambiar.
+- "cantidad": número entero.
+- "precio_venta" y "precio_compra": números decimales.
+- "talla": string en mayúsculas.
+- "categoria": string en formato Título (ej: "Polos").
+- Si no menciona un campo, déjalo en null."""
         try:
             response = await client.chat.completions.create(
                 model=MODELO_NLP,
                 messages=[
                     {
                         "role": "system",
-                        "content": "Eres un clasificador de intenciones. Responde SOLO con JSON válido.",
+                        "content": "Eres un extractor de intenciones y datos. Responde SOLO con JSON válido.",
                     },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.0,
-                max_tokens=32,
+                max_tokens=150,
             )
             raw = response.choices[0].message.content.strip()
-            resultado = self._parsear(raw)
-            return {"accion": resultado.get("accion", "DESCONOCIDO").upper()}
+            raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
+            resultado = json.loads(raw)
+            accion = resultado.get("accion", "DESCONOCIDO").upper()
+            cambios = resultado.get("cambios", {}) or {}
+
+            # Normalizar tipos
+            if cambios.get("cantidad") is not None:
+                try:
+                    cambios["cantidad"] = int(cambios["cantidad"])
+                except (ValueError, TypeError):
+                    cambios["cantidad"] = None
+            if cambios.get("precio_venta") is not None:
+                try:
+                    cambios["precio_venta"] = float(cambios["precio_venta"])
+                except (ValueError, TypeError):
+                    cambios["precio_venta"] = None
+            if cambios.get("precio_compra") is not None:
+                try:
+                    cambios["precio_compra"] = float(cambios["precio_compra"])
+                except (ValueError, TypeError):
+                    cambios["precio_compra"] = None
+            if isinstance(cambios.get("talla"), str):
+                cambios["talla"] = cambios["talla"].strip().upper()
+            if isinstance(cambios.get("nombre"), str):
+                cambios["nombre"] = cambios["nombre"].strip().title()
+            if isinstance(cambios.get("categoria"), str):
+                cambios["categoria"] = cambios["categoria"].strip().title()
+
+            logger.info(f"[Groq] interpretar_accion_inventario accion={accion} cambios={cambios}")
+            return {"accion": accion, "cambios": cambios}
         except Exception as e:
             logger.error(f"[Groq] interpretar_accion_inventario error: {e}")
             msg = mensaje.strip().lower()
-            if any(w in msg for w in ["queda", "listo", "bien", "ok", "ya"]): return {"accion": "TERMINAR"}
-            if any(w in msg for w in ["otro", "mas", "más", "agrega"]): return {"accion": "AGREGAR_OTRO"}
-            if any(w in msg for w in ["mal", "error", "no", "corregir", "cambiar"]): return {"accion": "CORREGIR"}
-            return {"accion": "DESCONOCIDO"}
+            if any(w in msg for w in ["queda", "listo", "bien", "ok", "ya", "terminar", "sí", "si"]): return {"accion": "TERMINAR", "cambios": {}}
+            if any(w in msg for w in ["otro", "mas", "más", "agrega"]): return {"accion": "AGREGAR_OTRO", "cambios": {}}
+            if any(w in msg for w in ["mal", "error", "no", "corregir", "cambiar", "edita"]): return {"accion": "EDITAR", "cambios": {}}
+            return {"accion": "DESCONOCIDO", "cambios": {}}
 
 
     async def extraer_nombre_y_talla(self, texto_producto: str) -> dict:
