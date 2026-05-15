@@ -243,7 +243,12 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 return
 
             # "0" o "ninguno": pasar a decisión de producto nuevo
-            if msg_lower in ["0", "ninguno", "ninguna", "no está", "no esta", "no está aquí", "no esta aqui"]:
+            es_nuevo = any(w in msg_lower for w in [
+                "0", "ninguno", "ninguna", "no está", "no esta", "no hay", 
+                "agrega", "añadir", "nuevo", "no pertenece", "ningun", "no aparece"
+            ])
+            
+            if es_nuevo:
                 if operacion == "venta":
                     msg_decision = (
                         f"Entendido, no está en la lista 🔍\n\n"
@@ -257,8 +262,15 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                     )
                     await ycloud.send_text(from_number, msg_decision)
                 else:
-                    await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
-                    await ycloud.send_text(from_number, "Operación cancelada. ¿En qué más te ayudo?")
+                    msg_decision = (
+                        f"Entendido, no está en la lista 🔍\n\n"
+                        f"¿Quieres que agregue *{nombre_orig}* como un nuevo producto en tu catálogo?\n"
+                        f"Responde *Sí* para agregarlo, o *Cancelar*."
+                    )
+                    await onboarding_service.upsert_sesion(
+                        negocio_id_str, "ESPERANDO_DECISION_PRODUCTO_NUEVO", datos_temp
+                    )
+                    await ycloud.send_text(from_number, msg_decision)
                 return
 
             # Número de selección
@@ -457,46 +469,55 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                     cantidad_inicial= formulario["stock"],
                 )
 
-                # Registrar transacción con producto_id
-                nombre_final = formulario["nombre"] + (f" Talla {formulario['talla']}" if formulario.get("talla") else "")
-                simbolo_s     = datos_temp.get("venta_moneda", "S/")
-                nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
-                tx_id = await _guardar_transaccion_retornando_id(
-                    negocio_id  = negocio_id_str,
-                    tipo        = "venta",
-                    descripcion = nombre_final,
-                    monto       = datos_temp.get("venta_monto", 0),
-                    moneda      = datos_temp.get("venta_moneda_codigo", "PEN"),
-                    fecha       = datos_temp.get("venta_fecha"),
-                    hora        = datos_temp.get("venta_hora"),
-                    cantidad    = cantidad,
-                    producto_id = producto_id_nuevo,
-                )
+                operacion = datos_temp.get("operacion_stock", "venta")
 
-                # Descontar stock de la venta
-                descuento = await stock_service.ejecutar_descuento_venta(
-                    negocio_id      = negocio_id_str,
-                    producto_id     = producto_id_nuevo,
-                    nombre_producto = nombre_prod,
-                    cantidad        = cantidad,
-                    transaccion_id  = tx_id,
-                )
+                if operacion == "venta":
+                    # Registrar transacción con producto_id
+                    nombre_final = formulario["nombre"] + (f" Talla {formulario['talla']}" if formulario.get("talla") else "")
+                    simbolo_s     = datos_temp.get("venta_moneda", "S/")
+                    nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
+                    tx_id = await _guardar_transaccion_retornando_id(
+                        negocio_id  = negocio_id_str,
+                        tipo        = "venta",
+                        descripcion = nombre_final,
+                        monto       = datos_temp.get("venta_monto", 0),
+                        moneda      = datos_temp.get("venta_moneda_codigo", "PEN"),
+                        fecha       = datos_temp.get("venta_fecha"),
+                        hora        = datos_temp.get("venta_hora"),
+                        cantidad    = cantidad,
+                        producto_id = producto_id_nuevo,
+                    )
 
-                await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                    # Descontar stock de la venta
+                    descuento = await stock_service.ejecutar_descuento_venta(
+                        negocio_id      = negocio_id_str,
+                        producto_id     = producto_id_nuevo,
+                        nombre_producto = nombre_prod,
+                        cantidad        = cantidad,
+                        transaccion_id  = tx_id,
+                    )
 
-                conf_venta = (
-                    f"✅ Venta registrada, {nombre_propio}\n\n"
-                    f"📅 {datos_temp.get('venta_fecha','')} {datos_temp.get('venta_hora','')}\n"
-                    f"📝 Producto: {nombre_final}\n"
-                    f"📦 Cantidad: {cantidad}\n"
-                    f"💰 Total: {simbolo_s} {datos_temp.get('venta_monto', 0):.2f}"
-                )
-                conf_producto = (
-                    f"✅ \"{nombre_final}\" agregado a tu catálogo 📦\n"
-                    f"{descuento['mensaje_stock']}"
-                )
-                await ycloud.send_text(from_number, conf_venta)
-                await ycloud.send_text(from_number, conf_producto)
+                    await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+
+                    conf_venta = (
+                        f"✅ Venta registrada, {nombre_propio}\n\n"
+                        f"📅 {datos_temp.get('venta_fecha','')} {datos_temp.get('venta_hora','')}\n"
+                        f"📝 Producto: {nombre_final}\n"
+                        f"📦 Cantidad: {cantidad}\n"
+                        f"💰 Total: {simbolo_s} {datos_temp.get('venta_monto', 0):.2f}"
+                    )
+                    conf_producto = (
+                        f"✅ \"{nombre_final}\" agregado a tu catálogo 📦\n"
+                        f"{descuento['mensaje_stock']}"
+                    )
+                    await ycloud.send_text(from_number, conf_venta)
+                    await ycloud.send_text(from_number, conf_producto)
+                else:
+                    await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                    await ycloud.send_text(
+                        from_number,
+                        f"✅ Agregué \"{formulario['nombre']}\" a tu inventario con {formulario['stock']} unidades 📦"
+                    )
 
             elif accion == "CANCELAR":
                 # Registrar venta sin producto_id
@@ -672,7 +693,7 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 msg_lista = (
                     f"¿Cuál de estos vendiste? 🤔\n\n"
                     f"{lista}\n\n"
-                    f"Escribe el número, o *0* si no está en la lista."
+                    f"Escribe el número, o dime si no está en la lista."
                 )
                 datos_venta_pendiente["candidatos_stock"] = candidatos
                 datos_venta_pendiente["operacion_stock"]  = "venta"

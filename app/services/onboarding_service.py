@@ -428,7 +428,8 @@ class OnboardingService:
         bot_msg: str,
         max_turns: int = 3,
     ) -> None:
-        datos = self._leer_datos_temp(sesion)
+        latest_sesion = await self._obtener_sesion_bot(negocio_id)
+        datos = self._leer_datos_temp(latest_sesion)
         historial = datos.get("historial_mensajes", [])
 
         historial.append({"role": "user",      "content": user_msg})
@@ -441,7 +442,7 @@ class OnboardingService:
         datos["historial_mensajes"] = historial
 
         estado_actual = (
-            sesion.get("estado_conversacion", "activo") if sesion else "activo"
+            latest_sesion.get("estado_conversacion", "activo") if latest_sesion else "activo"
         )
         await self.upsert_sesion(negocio_id, estado_actual, datos)
 

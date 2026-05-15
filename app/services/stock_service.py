@@ -506,7 +506,7 @@ class StockService:
             )
             return {
                 "estado": "pendiente_seleccion",
-                "mensaje": f"¿A cuál de estos te refieres?\n\n{lista}\n\nEscribe el número.",
+                "mensaje": f"¿A cuál de estos te refieres?\n\n{lista}\n\nEscribe el número, o dime si no está en la lista.",
                 "producto_id": None,
                 "candidatos": productos_info,
             }
