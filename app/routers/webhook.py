@@ -405,12 +405,13 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 moneda      = datos.get("moneda", "PEN"),
                 fecha       = datos.get("fecha"),
                 hora        = datos.get("hora"),
+                cantidad    = cantidad,
             )
 
             respuesta = (
                 f'✅ Venta registrada, {nombre_propio}\n\n'
                 f"📅 {f_fecha} {f_hora}\n"
-                f"📝 {nombre_producto}\n"
+                f"📝 {cantidad}x {nombre_producto}\n"
                 f"💰 {simbolo} {datos.get('total', 0):.2f}"
             )
             await ycloud.send_text(from_number, respuesta)
@@ -600,10 +601,11 @@ async def _guardar_transaccion(
     moneda: str = "PEN",
     fecha: str = None,
     hora: str = None,
+    cantidad: int = 1,
 ) -> None:
     """Guarda transacción sin retornar el id. Para gastos."""
     await _guardar_transaccion_retornando_id(
-        negocio_id, tipo, descripcion, monto, moneda, fecha, hora
+        negocio_id, tipo, descripcion, monto, moneda, fecha, hora, cantidad
     )
 
 
@@ -615,6 +617,7 @@ async def _guardar_transaccion_retornando_id(
     moneda: str = "PEN",
     fecha: str = None,
     hora: str = None,
+    cantidad: int = 1,
 ) -> str | None:
     """
     Guarda la transacción y retorna su UUID como string.
@@ -633,21 +636,21 @@ async def _guardar_transaccion_retornando_id(
             row = await conn.fetchrow(
                 """
                 INSERT INTO transacciones
-                    (negocio_id, tipo, descripcion, monto, moneda, fecha, hora, origen_registro)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp')
+                    (negocio_id, tipo, descripcion, monto, moneda, fecha, hora, origen_registro, cantidad)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp', $8)
                 RETURNING id::text
                 """,
-                negocio_id, tipo, descripcion, float(monto), moneda, fecha_obj, hora_obj,
+                negocio_id, tipo, descripcion, float(monto), moneda, fecha_obj, hora_obj, cantidad,
             )
         else:
             row = await conn.fetchrow(
                 """
                 INSERT INTO transacciones
-                    (negocio_id, tipo, descripcion, monto, moneda, fecha, origen_registro)
-                VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, 'whatsapp')
+                    (negocio_id, tipo, descripcion, monto, moneda, fecha, origen_registro, cantidad)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, 'whatsapp', $6)
                 RETURNING id::text
                 """,
-                negocio_id, tipo, descripcion, float(monto), moneda,
+                negocio_id, tipo, descripcion, float(monto), moneda, cantidad,
             )
 
     tx_id = row["id"] if row else None

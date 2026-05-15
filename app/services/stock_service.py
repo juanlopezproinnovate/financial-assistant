@@ -49,6 +49,7 @@ class StockService:
                 SELECT
                     p.id::text,
                     p.nombre,
+                    p.talla,
                     p.nombre_variantes,
                     p.precio_venta_pen,
                     s.cantidad_actual,
@@ -284,9 +285,17 @@ class StockService:
                 if producto and nombre_producto.lower() != producto["nombre"].lower():
                     await self.agregar_variante(producto_id, nombre_producto)
 
+                if transaccion_id and producto and producto.get("categoria_id"):
+                    pool = await get_pool()
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE transacciones SET categoria_id = $1 WHERE id = $2::uuid",
+                            producto["categoria_id"], transaccion_id
+                        )
+
                 alerta = resultado.get("alerta_stock", False)
-                cantidad_restante = resultado.get("cantidad_despues", "?")
-                mensaje = f"📦 Stock actualizado: quedan {cantidad_restante} unidades de {producto['nombre']}."
+                str_talla = f" Talla {producto['talla']}" if producto.get("talla") else ""
+                mensaje = f"📦 Stock actualizado: quedan {cantidad_restante} unidades de {producto['nombre']}{str_talla}."
                 if alerta:
                     mensaje += f"\n⚠️ Stock bajo — menos del mínimo ({resultado.get('cantidad_minima')} unid.)."
 
@@ -318,7 +327,7 @@ class StockService:
                     productos_info.append(c)
 
             lista = "\n".join(
-                f"{i+1}. {p['nombre']} (stock: {p.get('cantidad_actual', '?')})"
+                f"{i+1}. {p['nombre']}" + (f", Talla: {p['talla']}" if p.get("talla") else "") + f" (stock: {p.get('cantidad_actual', '?')})"
                 for i, p in enumerate(productos_info)
             )
             mensaje = (
@@ -432,7 +441,7 @@ class StockService:
             ids = resolucion["candidatos_ids"]
             productos_info = [c for c in candidatos if c["id"] in ids]
             lista = "\n".join(
-                f"{i+1}. {p['nombre']} (stock: {p.get('cantidad_actual', '?')})"
+                f"{i+1}. {p['nombre']}" + (f", Talla: {p['talla']}" if p.get("talla") else "") + f" (stock: {p.get('cantidad_actual', '?')})"
                 for i, p in enumerate(productos_info)
             )
             return {
@@ -483,9 +492,19 @@ class StockService:
                 transaccion_id=transaccion_id,
             )
             producto = await self.get_producto(producto_id)
+            if transaccion_id and producto and producto.get("categoria_id"):
+                pool = await get_pool()
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE transacciones SET categoria_id = $1 WHERE id = $2::uuid",
+                        producto["categoria_id"], transaccion_id
+                    )
+
             alerta = resultado.get("alerta_stock", False)
             cantidad_restante = resultado.get("cantidad_despues", "?")
-            mensaje = f"📦 Listo. Quedan {cantidad_restante} unidades de {producto['nombre']}."
+            
+            str_talla = f" Talla {producto['talla']}" if producto.get("talla") else ""
+            mensaje = f"📦 Listo. Quedan {cantidad_restante} unidades de {producto['nombre']}{str_talla}."
             if alerta:
                 mensaje += f"\n⚠️ Stock bajo del mínimo."
             return {"estado": "descontado", "mensaje": mensaje, "alerta_stock": alerta}

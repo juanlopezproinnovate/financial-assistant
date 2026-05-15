@@ -293,7 +293,8 @@ class GeminiService:
             }
 
         lista_txt = "\n".join(
-            f'{i+1}. "{c["nombre"]}"' for i, c in enumerate(candidatos)
+            f'{i+1}. "{c["nombre"]}"' + (f' (Talla: {c["talla"]})' if c.get("talla") else "")
+            for i, c in enumerate(candidatos)
         )
         prompt = (
             f'El comerciante dijo que vendiÃ³: "{nombre_extraido}"\n\n'
