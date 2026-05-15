@@ -397,11 +397,14 @@ class OnboardingService:
         intro = "¡Genial! Vamos a cargar tu inventario 📦" if es_primero else "¡Perfecto! Siguiente producto 📦"
         return (
             f"{intro}\n\n"
-            "📝 Nombre, Talla, Stock, Precio de venta, Precio de compra (opcional)\n\n"
-            "Ejemplo de mensaje:\n"
-            "_Polo manga corta, Talla XL, stock 50, precio de venta 50, precio de compra 30_\n\n"
-            "También puedes copiar el formato y reemplazar los valores 😊 "
-            "Si algo te falta saber, puedes escribir solo lo que tengas y te ayudo con lo demás."
+            "Para registrar tus productos, usa el siguiente formato: ✨\n\n"
+            "📝 *Nombre:* Polo básico\n"
+            "📐 *Talla:* M\n"
+            "📦 *Stock:* 10\n"
+            "💰 *Precio de Venta:* 35\n"
+            "💵 *Precio de Compra:* 10 (opcional)\n\n"
+            "💡 _Puedes copiar el formato de arriba y solo cambiar los datos._\n\n"
+            "Si no tienes toda la información ahora, no te preocupes, escribe lo que tengas y te ayudaré con el resto. 🚀"
         )
 
     # ──────────────────────────────────────────────
