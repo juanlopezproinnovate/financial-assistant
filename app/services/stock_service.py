@@ -294,6 +294,7 @@ class StockService:
                         )
 
                 alerta = resultado.get("alerta_stock", False)
+                cantidad_restante = resultado.get("cantidad_despues", "?")
                 str_talla = f" Talla {producto['talla']}" if producto.get("talla") else ""
                 mensaje = f"📦 Stock actualizado: quedan {cantidad_restante} unidades de {producto['nombre']}{str_talla}."
                 if alerta:
