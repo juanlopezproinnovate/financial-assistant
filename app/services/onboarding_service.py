@@ -623,9 +623,11 @@ class OnboardingService:
             negocio_id = await self.crear_negocio(telefono)
             await self.upsert_sesion(negocio_id, "onboarding_1", {})
             return (
-                "¡Hola! 👋 Soy *Quri*, tu asistente de negocios para gestionar "
-                "ventas, gastos e inventario por WhatsApp.\n\n"
-                "¿Cuál es el *nombre de tu negocio* de ropa en Tacna?"
+                "¡Hola! Qué gusto saludarte. 👋 Soy *Quri* y estoy aquí para que hagamos "
+                "crecer tu negocio juntos. 🚀\n\n"
+                "Puedo ayudarte a registrar tus *ventas y gastos*, y llevar un control "
+                "de tu *inventario* de forma fácil. ✨\n\n"
+                "Para comenzar, ¿cómo se llama tu tienda de ropa?"
             )
 
         negocio_id = str(negocio["id"])
@@ -684,7 +686,7 @@ class OnboardingService:
                 atiende_turistas_chilenos=atiende_chilenos,
             )
 
-            await self.upsert_sesion(negocio_id, "onboarding_4", datos_temp)
+            await self.upsert_sesion(negocio_id, "onboarding_3b", datos_temp)
 
             monedas_texto = {
                 "PEN": "solo Soles 🇵🇪",
@@ -694,9 +696,27 @@ class OnboardingService:
 
             return (
                 f"Anotado, aceptas *{monedas_texto}* 💰\n\n"
-                "¿Qué *tipo de ropa* vende tu negocio?\n"
-                "_(Ej: ropa para niños, dama, caballero, ropa deportiva, etc.)_"
+                "¿A qué hora sueles *cerrar tu tienda*? 🕐\n"
+                "_(Ej: 8pm, 20:00, 9 de la noche)_"
             )
+
+        # ══════════════════════════════════════════
+        #  PASO 3b → Capturar horario de cierre
+        # ══════════════════════════════════════════
+        elif estado == "onboarding_3b":
+            horario = await gemini_service.extraer_dato(
+                campo="hora de cierre en formato HH:MM",
+                mensaje=mensaje,
+            )
+            datos_temp["horario_cierre"] = horario
+            await self.actualizar_negocio(negocio_id, horario_cierre=horario)
+            await self.upsert_sesion(negocio_id, "onboarding_4", datos_temp)
+            return (
+                f"Perfecto, cierre a las *{horario}* 🕐 Anotado.\n\n"
+                "¿Y qué *tipo de ropa* vende tu negocio? 👗\n"
+                "_(Ej: ropa de dama, caballero, niños, ropa deportiva, etc.)_"
+            )
+
 
         # ══════════════════════════════════════════
         #  PASO 4 → Capturar tipo de ropa
@@ -1182,12 +1202,7 @@ class OnboardingService:
         #  PASO 6 → Capturar horario de cierre
         # ══════════════════════════════════════════
         elif estado == "onboarding_6":
-            horario = await gemini_service.extraer_dato(
-                campo="hora de cierre en formato HH:MM",
-                mensaje=mensaje,
-            )
-            datos_temp["horario_cierre"] = horario
-            await self.actualizar_negocio(negocio_id, horario_cierre=horario)
+            # Horario ya guardado en onboarding_3b — aquí solo cerramos el onboarding
             await self.completar_onboarding(negocio_id)
             await self.upsert_sesion(negocio_id, "activo", {})
 
@@ -1202,6 +1217,7 @@ class OnboardingService:
                 "📊 _'¿Cuánto vendí hoy?'_\n\n"
                 "¡Estoy aquí para ayudarte! 💪"
             )
+
 
         # ── Estado desconocido: reiniciar ──
         else:
