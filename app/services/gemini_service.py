@@ -353,6 +353,35 @@ class GeminiService:
                 }
             return {"match": "ninguno", "producto_id": None, "candidatos_ids": []}
 
+    async def extraer_datos_stock_inicial(self, mensaje: str) -> dict:
+        """
+        Extrae cantidad, talla y precio_costo a partir del mensaje del usuario
+        cuando responde cuántos productos tiene en stock inicial (y datos extra opcionales).
+        """
+        prompt = (
+            f"El usuario está registrando el stock inicial de un producto nuevo.\n"
+            f'Mensaje del usuario: "{mensaje}"\n\n'
+            f"Extrae la cantidad en stock, la talla (si la menciona) y el precio de compra (si lo menciona).\n"
+            f'Responde SOLO con JSON válido:\n'
+            f'{{\n'
+            f'  "cantidad": int o null,\n'
+            f'  "talla": str o null (ej: "M", "L", "42"),\n'
+            f'  "precio_costo": float o null\n'
+            f'}}\n'
+            f"Asegúrate de no usar markdown, solo el JSON directo."
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=64,
+            )
+            return self._parsear(response.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"[Groq] extraer_datos_stock_inicial error: {e}")
+            return {"cantidad": None, "talla": None, "precio_costo": None}
+
     async def confirmar_producto_nuevo(
         self,
         nombre: str,

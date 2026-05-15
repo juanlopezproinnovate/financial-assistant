@@ -281,7 +281,7 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 await ycloud.send_text(
                     from_number,
                     f'✅ "{nombre_prod.title()}" agregado a tu catálogo 📦\n'
-                    f"¿Cuántas unidades tienes en stock ahora mismo? (escribe el número)",
+                    f"¿Cuántas unidades tienes en stock ahora mismo? Si gustas, también dime la talla y su precio de compra (opcional). Ej: '15 unidades, talla L, costo 20' o solo el número.",
                 )
                 await onboarding_service.upsert_sesion(
                     negocio_id_str,
@@ -305,10 +305,40 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
             nombre_prod   = datos_temp.get("nombre_producto", "el producto")
 
             try:
+                # 1. Intentar como número simple
                 cantidad_actual = int(text.strip())
+                talla = None
+                precio_costo = None
+            except ValueError:
+                # 2. Si hay texto, usar IA para extraer cantidad, talla y costo
+                datos_extraidos = await gemini_service.extraer_datos_stock_inicial(text)
+                cantidad_actual = datos_extraidos.get("cantidad")
+                talla = datos_extraidos.get("talla")
+                precio_costo = datos_extraidos.get("precio_costo")
+
+            if cantidad_actual is None:
+                await ycloud.send_text(from_number, "No pude entender la cantidad. Por favor escribe el número de unidades en stock.")
+                return
+
+            try:
                 if producto_id:
                     pool = await get_pool()
                     async with pool.acquire() as conn:
+                        # ── ACTUALIZAR PRODUCTO (talla y costo) ──
+                        sets = []
+                        args = [producto_id]
+                        if talla:
+                            args.append(talla.strip().upper())
+                            sets.append(f"talla = ${len(args)}")
+                        if precio_costo is not None:
+                            args.append(float(precio_costo))
+                            sets.append(f"precio_costo = ${len(args)}")
+                        
+                        if sets:
+                            query = f"UPDATE productos SET {', '.join(sets)} WHERE id = $1"
+                            await conn.execute(query, *args)
+
+                        # ── ACTUALIZAR STOCK ──
                         cant_bd = await conn.fetchval(
                             "SELECT cantidad_actual FROM stock WHERE producto_id = $1",
                             producto_id,
@@ -331,12 +361,20 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                         )
 
                 await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                
+                # Mensaje de éxito dinámico
+                extras = []
+                if talla: extras.append(f"talla {talla.strip().upper()}")
+                if precio_costo is not None: extras.append(f"costo S/{float(precio_costo):.2f}")
+                texto_extras = f" ({', '.join(extras)})" if extras else ""
+                
                 await ycloud.send_text(
                     from_number,
-                    f"✅ Listo. {nombre_prod.title()} tiene {cantidad_actual} unidades en stock 📦",
+                    f"✅ Listo. {nombre_prod.title()}{texto_extras} tiene {cantidad_actual} unidades en stock 📦",
                 )
-            except ValueError:
-                await ycloud.send_text(from_number, "Escribe solo el número de unidades. Ej: 25")
+            except Exception as e:
+                logger.error(f"[Stock Inicial] Error guardando datos: {e}")
+                await ycloud.send_text(from_number, "Hubo un error al guardar el stock. Intenta enviar solo el número.")
             return
 
         # ── FLUJO C: NLP activo (estado normal) ──
