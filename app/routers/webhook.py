@@ -207,199 +207,331 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
 
         # ── FLUJO B2: Estado ESPERANDO_SELECCION_STOCK ──
         elif estado == "ESPERANDO_SELECCION_STOCK":
-            if text.lower().strip() == "cancelar":
+            candidatos  = datos_temp.get("candidatos_stock", [])
+            operacion   = datos_temp.get("operacion_stock", "venta")
+            cantidad    = datos_temp.get("cantidad_stock", 1)
+            nombre_orig = datos_temp.get("nombre_producto_original", "")
+            msg_lower   = text.strip().lower()
+
+            # Cancelar: registrar venta sin stock
+            if msg_lower == "cancelar":
+                if operacion == "venta":
+                    simbolo_s = datos_temp.get("venta_moneda", "S/")
+                    tx_id = await _guardar_transaccion_retornando_id(
+                        negocio_id  = negocio_id_str,
+                        tipo        = "venta",
+                        descripcion = nombre_orig,
+                        monto       = datos_temp.get("venta_monto", 0),
+                        moneda      = datos_temp.get("venta_moneda_codigo", "PEN"),
+                        fecha       = datos_temp.get("venta_fecha"),
+                        hora        = datos_temp.get("venta_hora"),
+                        cantidad    = cantidad,
+                    )
+                    nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
+                    conf = (
+                        f"✅ Venta registrada, {nombre_propio}\n\n"
+                        f"📅 {datos_temp.get('venta_fecha','')} {datos_temp.get('venta_hora','')}\n"
+                        f"📝 Producto: {nombre_orig}\n"
+                        f"📦 Cantidad: {cantidad}\n"
+                        f"💰 Total: {simbolo_s} {datos_temp.get('venta_monto', 0):.2f}\n\n"
+                        f"_(Sin descuento de stock)_"
+                    )
+                    await ycloud.send_text(from_number, conf)
+                else:
+                    await ycloud.send_text(from_number, "Cancelado. El stock no fue modificado.")
                 await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
-                await ycloud.send_text(from_number, "Cancelado. El stock no fue modificado. ¿En qué más te ayudo?")
                 return
 
-            try:
-                seleccion   = int(text.strip())
-                candidatos  = datos_temp.get("candidatos_stock", [])
-                operacion   = datos_temp.get("operacion_stock", "venta")
-                cantidad    = datos_temp.get("cantidad_stock", 1)
-                nombre_orig = datos_temp.get("nombre_producto_original", "")
-                tx_id       = datos_temp.get("transaccion_id")
-
-                if 1 <= seleccion <= len(candidatos):
-                    producto_id = candidatos[seleccion - 1]["id"]
-                    resultado   = await stock_service.confirmar_seleccion_parcial(
-                        negocio_id      = negocio_id_str,
-                        producto_id     = producto_id,
-                        nombre_original = nombre_orig,
-                        cantidad        = cantidad,
-                        transaccion_id  = tx_id,
-                        operacion       = operacion,
+            # "0" o "ninguno": pasar a decisión de producto nuevo
+            if msg_lower in ["0", "ninguno", "ninguna", "no está", "no esta", "no está aquí", "no esta aqui"]:
+                if operacion == "venta":
+                    msg_decision = (
+                        f"Entendido, no está en la lista 🔍\n\n"
+                        f"¿Qué quieres hacer?\n"
+                        f"1️⃣ *Agregar* al catálogo\n"
+                        f"2️⃣ *Seguir* sin añadir al stock\n\n"
+                        f"_(La venta se registrará cuando elijas)_"
                     )
+                    await onboarding_service.upsert_sesion(
+                        negocio_id_str, "ESPERANDO_DECISION_PRODUCTO_NUEVO", datos_temp
+                    )
+                    await ycloud.send_text(from_number, msg_decision)
+                else:
                     await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
-                    
-                    if operacion == "venta":
-                        prod_nombre = resultado.get("producto_nombre", nombre_orig)
-                        prod_talla = resultado.get("producto_talla")
-                        if prod_talla:
-                            prod_nombre += f" Talla {prod_talla}"
-                        
-                        monto = datos_temp.get("venta_monto", 0)
-                        simbolo = datos_temp.get("venta_moneda", "S/")
-                        f_fecha = datos_temp.get("venta_fecha", "")
-                        f_hora = datos_temp.get("venta_hora", "")
-                        nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
-                        
-                        respuesta_venta = (
-                            f'✅ Venta registrada, {nombre_propio}\n\n'
-                            f"📅 {f_fecha} {f_hora}\n"
-                            f"📝 Producto: {prod_nombre}\n"
-                            f"📦 Cantidad: {cantidad}\n"
-                            f"💰 Total: {simbolo} {monto:.2f}"
-                        )
-                        await ycloud.send_text(from_number, respuesta_venta)
+                    await ycloud.send_text(from_number, "Operación cancelada. ¿En qué más te ayudo?")
+                return
 
-                    await ycloud.send_text(from_number, resultado["mensaje"])
+            # Número de selección
+            try:
+                seleccion = int(text.strip())
+                if 1 <= seleccion <= len(candidatos):
+                    producto_id_sel = candidatos[seleccion - 1]["id"]
+
+                    if operacion == "venta":
+                        prod = await stock_service.get_producto(producto_id_sel)
+                        prod_nombre = prod["nombre"] if prod else nombre_orig
+                        prod_talla  = prod.get("talla") if prod else None
+                        nombre_final = prod_nombre + (f" Talla {prod_talla}" if prod_talla else "")
+
+                        # Registrar transacción ahora
+                        tx_id = await _guardar_transaccion_retornando_id(
+                            negocio_id  = negocio_id_str,
+                            tipo        = "venta",
+                            descripcion = nombre_final,
+                            monto       = datos_temp.get("venta_monto", 0),
+                            moneda      = datos_temp.get("venta_moneda_codigo", "PEN"),
+                            fecha       = datos_temp.get("venta_fecha"),
+                            hora        = datos_temp.get("venta_hora"),
+                            cantidad    = cantidad,
+                            producto_id = producto_id_sel,
+                        )
+
+                        # Descontar stock
+                        descuento = await stock_service.ejecutar_descuento_venta(
+                            negocio_id      = negocio_id_str,
+                            producto_id     = producto_id_sel,
+                            nombre_producto = nombre_orig,
+                            cantidad        = cantidad,
+                            transaccion_id  = tx_id,
+                        )
+
+                        await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                        simbolo_s    = datos_temp.get("venta_moneda", "S/")
+                        nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
+                        conf = (
+                            f"✅ Venta registrada, {nombre_propio}\n\n"
+                            f"📅 {datos_temp.get('venta_fecha','')} {datos_temp.get('venta_hora','')}\n"
+                            f"📝 Producto: {nombre_final}\n"
+                            f"📦 Cantidad: {cantidad}\n"
+                            f"💰 Total: {simbolo_s} {datos_temp.get('venta_monto', 0):.2f}"
+                        )
+                        await ycloud.send_text(from_number, conf)
+                        await ycloud.send_text(from_number, descuento["mensaje_stock"])
+
+                    else:
+                        # Inventario — usar flujo existente
+                        resultado = await stock_service.confirmar_seleccion_parcial(
+                            negocio_id      = negocio_id_str,
+                            producto_id     = producto_id_sel,
+                            nombre_original = nombre_orig,
+                            cantidad        = cantidad,
+                            transaccion_id  = None,
+                            operacion       = operacion,
+                        )
+                        await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                        await ycloud.send_text(from_number, resultado["mensaje"])
                 else:
                     await ycloud.send_text(
                         from_number,
-                        f"Escribe un número entre 1 y {len(candidatos)}, o 'cancelar'.",
+                        f"Escribe un número entre 1 y {len(candidatos)}, *0* si no está en la lista, o *cancelar*.",
                     )
             except ValueError:
-                await ycloud.send_text(from_number, "Por favor escribe el número del producto o 'cancelar'.")
-            return
-
-        # ── FLUJO B3: Estado ESPERANDO_CONFIRMACION_PRODUCTO_NUEVO ──
-        elif estado == "ESPERANDO_CONFIRMACION_PRODUCTO_NUEVO":
-            confirma = text.lower().strip() in ["sí", "si", "s", "yes", "dale", "ok", "1"]
-            rechaza  = text.lower().strip() in ["no", "n", "cancelar", "nel", "2"]
-
-            nombre_prod  = datos_temp.get("nombre_producto_original", "")
-            cantidad     = datos_temp.get("cantidad_stock", 1)
-            precio_venta = datos_temp.get("precio_unitario_stock")
-            tx_id        = datos_temp.get("transaccion_id")
-            operacion    = datos_temp.get("operacion_stock", "venta")
-
-            if confirma:
-                stock_inicial = 0 if operacion == "venta" else cantidad
-
-                producto_id = await stock_service.crear_producto(
-                    negocio_id      = negocio_id_str,
-                    nombre          = nombre_prod,
-                    precio_venta    = precio_venta,
-                    precio_costo    = None,
-                    cantidad_inicial= stock_inicial,
-                )
-
-                if operacion == "venta" and stock_inicial == 0:
-                    await stock_service.reponer_stock_bd(
-                        producto_id = producto_id,
-                        negocio_id  = negocio_id_str,
-                        cantidad    = cantidad,
-                        motivo      = "stock_retroactivo",
-                    )
-                    await stock_service.descontar_stock_bd(
-                        producto_id    = producto_id,
-                        negocio_id     = negocio_id_str,
-                        cantidad       = cantidad,
-                        transaccion_id = tx_id,
-                    )
-
-                await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
                 await ycloud.send_text(
                     from_number,
-                    f'✅ "{nombre_prod.title()}" agregado a tu catálogo 📦\n'
-                    f"¿Cuántas unidades tienes en stock ahora mismo? Si gustas, también dime la talla y su precio de compra (opcional). Ej: '15 unidades, talla L, costo 20' o solo el número.",
+                    f"Escribe el número del producto, *0* si no está aquí, o *cancelar*."
+                )
+            return
+
+        # ── FLUJO B3: Estado ESPERANDO_DECISION_PRODUCTO_NUEVO ──
+        elif estado == "ESPERANDO_DECISION_PRODUCTO_NUEVO":
+            nombre_prod     = datos_temp.get("nombre_producto_original", "")
+            cantidad        = datos_temp.get("cantidad_stock", 1)
+            precio_unitario = datos_temp.get("precio_unitario_stock")
+
+            decision = await gemini_service.interpretar_decision_producto_nuevo(text)
+            accion   = decision["accion"]
+
+            if accion == "AGREGAR":
+                # Extraer nombre limpio + talla
+                separado = await gemini_service.extraer_nombre_y_talla(nombre_prod)
+                nombre_limpio = separado.get("nombre") or nombre_prod.strip().title()
+                talla_extraida = separado.get("talla")
+
+                precio_venta_fmt = f"S/ {precio_unitario:.2f}" if precio_unitario else "(no especificado)"
+                formulario = {
+                    "nombre":        nombre_limpio,
+                    "talla":         talla_extraida,
+                    "stock":         None,
+                    "precio_venta":  precio_unitario,
+                    "precio_compra": None,
+                }
+                datos_temp["formulario_producto"] = formulario
+
+                talla_linea = f"📐 *Talla:* {talla_extraida}\n" if talla_extraida else "📐 *Talla:* (no especificada — puedes agregarla)\n"
+                msg_form = (
+                    f"Cuéntame más sobre el producto 📦\n\n"
+                    f"📝 *Nombre:* {nombre_limpio}\n"
+                    f"{talla_linea}"
+                    f"📦 *Stock:* (¿cuántas unidades tienes ahora?)\n"
+                    f"💰 *Precio de Venta:* {precio_venta_fmt}\n"
+                    f"💵 *Precio de Compra:* (opcional)\n\n"
+                    f"Edita lo que quieras en un mensaje, escribe *guardar* para confirmar, o *cancelar*."
                 )
                 await onboarding_service.upsert_sesion(
-                    negocio_id_str,
-                    "ESPERANDO_STOCK_INICIAL",
-                    {"producto_id": producto_id, "nombre_producto": nombre_prod},
+                    negocio_id_str, "ESPERANDO_DATOS_PRODUCTO_NUEVO", datos_temp
                 )
+                await ycloud.send_text(from_number, msg_form)
 
-            elif rechaza:
+            elif accion in ("CONTINUAR", "CANCELAR"):
+                # Registrar venta sin producto_id
+                simbolo_s     = datos_temp.get("venta_moneda", "S/")
+                nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
+                tx_id = await _guardar_transaccion_retornando_id(
+                    negocio_id  = negocio_id_str,
+                    tipo        = "venta",
+                    descripcion = nombre_prod,
+                    monto       = datos_temp.get("venta_monto", 0),
+                    moneda      = datos_temp.get("venta_moneda_codigo", "PEN"),
+                    fecha       = datos_temp.get("venta_fecha"),
+                    hora        = datos_temp.get("venta_hora"),
+                    cantidad    = cantidad,
+                )
+                conf = (
+                    f"✅ Venta registrada, {nombre_propio}\n\n"
+                    f"📅 {datos_temp.get('venta_fecha','')} {datos_temp.get('venta_hora','')}\n"
+                    f"📝 Producto: {nombre_prod}\n"
+                    f"📦 Cantidad: {cantidad}\n"
+                    f"💰 Total: {simbolo_s} {datos_temp.get('venta_monto', 0):.2f}\n\n"
+                    f"_(Sin descuento de stock)_"
+                )
                 await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                await ycloud.send_text(from_number, conf)
+
+            else:
                 await ycloud.send_text(
                     from_number,
-                    "Entendido, no se agregó al catálogo. La venta sí quedó registrada 💰",
+                    "No entendí 😅\nEscribe *1* para *Agregar* al catálogo o *2* para *Seguir* sin stock."
                 )
-            else:
-                await ycloud.send_text(from_number, "Responde *sí* para agregar el producto o *no* para omitirlo.")
             return
 
-        # ── FLUJO B4: Estado ESPERANDO_STOCK_INICIAL ──
-        elif estado == "ESPERANDO_STOCK_INICIAL":
-            producto_id   = datos_temp.get("producto_id")
-            nombre_prod   = datos_temp.get("nombre_producto", "el producto")
+        # ── FLUJO B4: Estado ESPERANDO_DATOS_PRODUCTO_NUEVO ──
+        elif estado == "ESPERANDO_DATOS_PRODUCTO_NUEVO":
+            formulario      = datos_temp.get("formulario_producto", {})
+            nombre_prod     = datos_temp.get("nombre_producto_original", "")
+            cantidad        = datos_temp.get("cantidad_stock", 1)
 
-            try:
-                # 1. Intentar como número simple
-                cantidad_actual = int(text.strip())
-                talla = None
-                precio_costo = None
-            except ValueError:
-                # 2. Si hay texto, usar IA para extraer cantidad, talla y costo
-                datos_extraidos = await gemini_service.extraer_datos_stock_inicial(text)
-                cantidad_actual = datos_extraidos.get("cantidad")
-                talla = datos_extraidos.get("talla")
-                precio_costo = datos_extraidos.get("precio_costo")
+            interpretacion = await gemini_service.interpretar_formulario_producto_venta(text, formulario)
+            accion  = interpretacion["accion"]
+            cambios = interpretacion.get("cambios", {})
 
-            if cantidad_actual is None:
-                await ycloud.send_text(from_number, "No pude entender la cantidad. Por favor escribe el número de unidades en stock.")
-                return
+            if accion == "EDITAR":
+                # Aplicar cambios al formulario
+                for campo, valor in cambios.items():
+                    if valor is not None:
+                        formulario[campo] = valor
+                datos_temp["formulario_producto"] = formulario
 
-            try:
-                if producto_id:
-                    pool = await get_pool()
-                    async with pool.acquire() as conn:
-                        # ── ACTUALIZAR PRODUCTO (talla y costo) ──
-                        sets = []
-                        args = [producto_id]
-                        if talla:
-                            args.append(talla.strip().upper())
-                            sets.append(f"talla = ${len(args)}")
-                        if precio_costo is not None:
-                            args.append(float(precio_costo))
-                            sets.append(f"precio_costo = ${len(args)}")
-                        
-                        if sets:
-                            query = f"UPDATE productos SET {', '.join(sets)} WHERE id = $1"
-                            await conn.execute(query, *args)
+                talla_linea = f"📐 *Talla:* {formulario.get('talla')}\n" if formulario.get("talla") else "📐 *Talla:* (no especificada)\n"
+                pv = formulario.get("precio_venta")
+                pc = formulario.get("precio_compra")
+                st = formulario.get("stock")
+                msg_form = (
+                    f"📝 *Nombre:* {formulario.get('nombre', '?')}\n"
+                    f"{talla_linea}"
+                    f"📦 *Stock:* {st if st is not None else '(no especificado)'}\n"
+                    f"💰 *Precio de Venta:* {f'S/ {pv:.2f}' if pv else '(no especificado)'}\n"
+                    f"💵 *Precio de Compra:* {f'S/ {pc:.2f}' if pc else '(opcional)'}\n\n"
+                    f"¿Queda así? Escribe *guardar*, sigue editando, o *cancelar*."
+                )
+                await onboarding_service.upsert_sesion(
+                    negocio_id_str, "ESPERANDO_DATOS_PRODUCTO_NUEVO", datos_temp
+                )
+                await ycloud.send_text(from_number, msg_form)
 
-                        # ── ACTUALIZAR STOCK ──
-                        cant_bd = await conn.fetchval(
-                            "SELECT cantidad_actual FROM stock WHERE producto_id = $1",
-                            producto_id,
-                        )
-                        await conn.execute(
-                            "UPDATE stock SET cantidad_actual = $1, ultima_actualizacion = NOW() WHERE producto_id = $2",
-                            cantidad_actual, producto_id,
-                        )
-                        diferencia = cantidad_actual - (cant_bd or 0)
-                        tipo_mov   = "entrada" if diferencia >= 0 else "salida"
-                        await conn.execute(
-                            """
-                            INSERT INTO stock_movimientos
-                                (producto_id, negocio_id, tipo, cantidad,
-                                 cantidad_antes, cantidad_despues, motivo)
-                            VALUES ($1, $2, $3, $4, $5, $6, 'ajuste_inicial')
-                            """,
-                            producto_id, negocio_id_str, tipo_mov,
-                            abs(diferencia), cant_bd or 0, cantidad_actual,
-                        )
+            elif accion == "GUARDAR":
+                # Validar campos mínimos
+                if not formulario.get("nombre"):
+                    await ycloud.send_text(from_number, "Falta el nombre del producto. ¿Cómo se llama?")
+                    return
+                if formulario.get("stock") is None:
+                    await ycloud.send_text(from_number, "¿Cuántas unidades tienes en stock ahora?")
+                    return
+
+                # Crear producto
+                producto_id_nuevo = await stock_service.crear_producto(
+                    negocio_id      = negocio_id_str,
+                    nombre          = formulario["nombre"],
+                    talla           = formulario.get("talla"),
+                    precio_venta    = formulario.get("precio_venta"),
+                    precio_costo    = formulario.get("precio_compra"),
+                    cantidad_inicial= formulario["stock"],
+                )
+
+                # Registrar transacción con producto_id
+                nombre_final = formulario["nombre"] + (f" Talla {formulario['talla']}" if formulario.get("talla") else "")
+                simbolo_s     = datos_temp.get("venta_moneda", "S/")
+                nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
+                tx_id = await _guardar_transaccion_retornando_id(
+                    negocio_id  = negocio_id_str,
+                    tipo        = "venta",
+                    descripcion = nombre_final,
+                    monto       = datos_temp.get("venta_monto", 0),
+                    moneda      = datos_temp.get("venta_moneda_codigo", "PEN"),
+                    fecha       = datos_temp.get("venta_fecha"),
+                    hora        = datos_temp.get("venta_hora"),
+                    cantidad    = cantidad,
+                    producto_id = producto_id_nuevo,
+                )
+
+                # Descontar stock de la venta
+                descuento = await stock_service.ejecutar_descuento_venta(
+                    negocio_id      = negocio_id_str,
+                    producto_id     = producto_id_nuevo,
+                    nombre_producto = nombre_prod,
+                    cantidad        = cantidad,
+                    transaccion_id  = tx_id,
+                )
 
                 await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
-                
-                # Mensaje de éxito dinámico
-                extras = []
-                if talla: extras.append(f"talla {talla.strip().upper()}")
-                if precio_costo is not None: extras.append(f"costo S/{float(precio_costo):.2f}")
-                texto_extras = f" ({', '.join(extras)})" if extras else ""
-                
+
+                conf_venta = (
+                    f"✅ Venta registrada, {nombre_propio}\n\n"
+                    f"📅 {datos_temp.get('venta_fecha','')} {datos_temp.get('venta_hora','')}\n"
+                    f"📝 Producto: {nombre_final}\n"
+                    f"📦 Cantidad: {cantidad}\n"
+                    f"💰 Total: {simbolo_s} {datos_temp.get('venta_monto', 0):.2f}"
+                )
+                conf_producto = (
+                    f"✅ \"{nombre_final}\" agregado a tu catálogo 📦\n"
+                    f"{descuento['mensaje_stock']}"
+                )
+                await ycloud.send_text(from_number, conf_venta)
+                await ycloud.send_text(from_number, conf_producto)
+
+            elif accion == "CANCELAR":
+                # Registrar venta sin producto_id
+                simbolo_s     = datos_temp.get("venta_moneda", "S/")
+                nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
+                tx_id = await _guardar_transaccion_retornando_id(
+                    negocio_id  = negocio_id_str,
+                    tipo        = "venta",
+                    descripcion = nombre_prod,
+                    monto       = datos_temp.get("venta_monto", 0),
+                    moneda      = datos_temp.get("venta_moneda_codigo", "PEN"),
+                    fecha       = datos_temp.get("venta_fecha"),
+                    hora        = datos_temp.get("venta_hora"),
+                    cantidad    = cantidad,
+                )
+                conf = (
+                    f"✅ Venta registrada, {nombre_propio}\n\n"
+                    f"📅 {datos_temp.get('venta_fecha','')} {datos_temp.get('venta_hora','')}\n"
+                    f"📝 Producto: {nombre_prod}\n"
+                    f"📦 Cantidad: {cantidad}\n"
+                    f"💰 Total: {simbolo_s} {datos_temp.get('venta_monto', 0):.2f}\n\n"
+                    f"_(Sin descuento de stock)_"
+                )
+                await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                await ycloud.send_text(from_number, conf)
+
+            else:
                 await ycloud.send_text(
                     from_number,
-                    f"✅ Listo. {nombre_prod.title()}{texto_extras} tiene {cantidad_actual} unidades en stock 📦",
+                    "No entendí 😅 Edita los datos, escribe *guardar* para confirmar, o *cancelar*."
                 )
-            except Exception as e:
-                logger.error(f"[Stock Inicial] Error guardando datos: {e}")
-                await ycloud.send_text(from_number, "Hubo un error al guardar el stock. Intenta enviar solo el número.")
             return
 
         # ── FLUJO C: NLP activo (estado normal) ──
+
 
         # 1. Leer historial de corto plazo antes de llamar al modelo
         historial = onboarding_service._leer_historial(sesion)
@@ -450,122 +582,123 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 await _responder_con_voz(from_number, respuesta)
             return
 
+
         # ── Intent VENTA ──
         if intent == "VENTA" and datos.get("total"):
             nombre_producto  = datos.get("producto", "producto")
             cantidad         = int(datos.get("cantidad", 1))
             precio_unitario  = datos.get("precio_unitario")
             nombre_propio    = negocio.get("nombre_propietario") or negocio.get("nombre_negocio") or "Comerciante"
+            total_venta      = datos.get("total", 0)
+            moneda_venta     = datos.get("moneda", "PEN")
 
-            transaccion_id = await _guardar_transaccion_retornando_id(
-                negocio_id  = negocio_id_str,
-                tipo        = "venta",
-                descripcion = nombre_producto,
-                monto       = datos.get("total", 0),
-                moneda      = datos.get("moneda", "PEN"),
-                fecha       = datos.get("fecha"),
-                hora        = datos.get("hora"),
-                cantidad    = cantidad,
-            )
+            # Datos de la venta para guardar en sesión si hay pasos intermedios
+            datos_venta_pendiente = {
+                "nombre_producto_original": nombre_producto,
+                "cantidad_stock":           cantidad,
+                "precio_unitario_stock":    precio_unitario,
+                "venta_monto":              total_venta,
+                "venta_moneda":             simbolo,
+                "venta_fecha":              f_fecha,
+                "venta_hora":               f_hora,
+                "venta_nombre_propio":      nombre_propio,
+                "venta_moneda_codigo":      moneda_venta,
+            }
 
+            # 1. Solo matching — no registramos aún
             resultado_stock = await stock_service.procesar_venta(
                 negocio_id      = negocio_id_str,
                 nombre_producto = nombre_producto,
                 cantidad        = cantidad,
                 precio_unitario = precio_unitario,
-                transaccion_id  = transaccion_id,
             )
-
             estado_stock = resultado_stock["estado"]
 
-            def _generar_msg_venta(nombre_final: str):
+            # Helper: construir mensaje confirmación de venta
+            def _msg_confirmacion_venta(nombre_final: str) -> str:
                 return (
-                    f'✅ Venta registrada, {nombre_propio}\n\n'
+                    f"✅ Venta registrada, {nombre_propio}\n\n"
                     f"📅 {f_fecha} {f_hora}\n"
                     f"📝 Producto: {nombre_final}\n"
                     f"📦 Cantidad: {cantidad}\n"
-                    f"💰 Total: {simbolo} {datos.get('total', 0):.2f}"
+                    f"💰 Total: {simbolo} {total_venta:.2f}"
                 )
 
-            if estado_stock == "descontado":
-                prod_nombre = resultado_stock.get("producto_nombre", nombre_producto)
-                prod_talla = resultado_stock.get("producto_talla")
-                if prod_talla:
-                    prod_nombre += f" Talla {prod_talla}"
-                
-                respuesta_venta = _generar_msg_venta(prod_nombre)
-                await ycloud.send_text(from_number, respuesta_venta)
-                
-                # Guardar en historial
-                try:
-                    await onboarding_service.guardar_en_historial(
-                        negocio_id_str, sesion, text, respuesta_venta
-                    )
-                except Exception as e:
-                    logger.warning(f"[Historial] No se pudo guardar VENTA: {e}")
+            # ── CASO A: match exacto → registrar + descontar + confirmar ──
+            if estado_stock == "exacto":
+                producto_id_match = resultado_stock["producto_id"]
+                prod_nombre = resultado_stock["producto_nombre"]
+                prod_talla  = resultado_stock["producto_talla"]
+                nombre_final = prod_nombre + (f" Talla {prod_talla}" if prod_talla else "")
 
-                if resultado_stock.get("alerta_stock") or resultado_stock.get("mensaje"):
-                    await ycloud.send_text(from_number, resultado_stock["mensaje"])
-
-            elif estado_stock == "pendiente_seleccion":
-                await onboarding_service.upsert_sesion(
-                    negocio_id_str,
-                    "ESPERANDO_SELECCION_STOCK",
-                    {
-                        "candidatos_stock":          resultado_stock["candidatos"],
-                        "operacion_stock":           "venta",
-                        "cantidad_stock":            cantidad,
-                        "nombre_producto_original":  nombre_producto,
-                        "precio_unitario_stock":     precio_unitario,
-                        "transaccion_id":            transaccion_id,
-                        "venta_monto":               datos.get('total', 0),
-                        "venta_moneda":              simbolo,
-                        "venta_fecha":               f_fecha,
-                        "venta_hora":                f_hora,
-                        "venta_nombre_propio":       nombre_propio,
-                    },
+                # Registrar transacción con producto_id
+                transaccion_id = await _guardar_transaccion_retornando_id(
+                    negocio_id  = negocio_id_str,
+                    tipo        = "venta",
+                    descripcion = nombre_final,
+                    monto       = total_venta,
+                    moneda      = moneda_venta,
+                    fecha       = datos.get("fecha"),
+                    hora        = datos.get("hora"),
+                    cantidad    = cantidad,
+                    producto_id = producto_id_match,
                 )
-                await ycloud.send_text(from_number, resultado_stock["mensaje"])
 
-            elif estado_stock == "pendiente_confirmacion":
-                respuesta_venta = _generar_msg_venta(nombre_producto)
+                # Descontar stock
+                descuento = await stock_service.ejecutar_descuento_venta(
+                    negocio_id      = negocio_id_str,
+                    producto_id     = producto_id_match,
+                    nombre_producto = nombre_producto,
+                    cantidad        = cantidad,
+                    transaccion_id  = transaccion_id,
+                )
+
+                respuesta_venta = _msg_confirmacion_venta(nombre_final)
                 await ycloud.send_text(from_number, respuesta_venta)
-                
-                # Guardar en historial
+                await ycloud.send_text(from_number, descuento["mensaje_stock"])
                 try:
-                    await onboarding_service.guardar_en_historial(
-                        negocio_id_str, sesion, text, respuesta_venta
-                    )
-                except Exception as e:
+                    await onboarding_service.guardar_en_historial(negocio_id_str, sesion, text, respuesta_venta)
+                except Exception:
                     pass
 
-                await onboarding_service.upsert_sesion(
-                    negocio_id_str,
-                    "ESPERANDO_CONFIRMACION_PRODUCTO_NUEVO",
-                    {
-                        "operacion_stock":           "venta",
-                        "cantidad_stock":            cantidad,
-                        "nombre_producto_original":  nombre_producto,
-                        "precio_unitario_stock":     precio_unitario,
-                        "transaccion_id":            transaccion_id,
-                    },
+            # ── CASO B: candidatos múltiples → guardar en sesión, preguntar ──
+            elif estado_stock == "parcial":
+                candidatos = resultado_stock["candidatos"]
+                lista = "\n".join(
+                    f"{i+1}. {p['nombre']}" + (f", Talla {p['talla']}" if p.get("talla") else "")
+                    + f" (stock: {p.get('cantidad_actual', '?')})"
+                    for i, p in enumerate(candidatos)
                 )
-                await ycloud.send_text(from_number, resultado_stock["mensaje"])
+                msg_lista = (
+                    f"¿Cuál de estos vendiste? 🤔\n\n"
+                    f"{lista}\n\n"
+                    f"Escribe el número, o *0* si no está en la lista."
+                )
+                datos_venta_pendiente["candidatos_stock"] = candidatos
+                datos_venta_pendiente["operacion_stock"]  = "venta"
+                await onboarding_service.upsert_sesion(
+                    negocio_id_str, "ESPERANDO_SELECCION_STOCK", datos_venta_pendiente
+                )
+                await ycloud.send_text(from_number, msg_lista)
 
-            elif estado_stock == "error_stock":
-                prod_nombre = resultado_stock.get("producto_nombre", nombre_producto)
-                prod_talla = resultado_stock.get("producto_talla")
-                if prod_talla:
-                    prod_nombre += f" Talla {prod_talla}"
-                    
-                respuesta_venta = _generar_msg_venta(prod_nombre)
-                await ycloud.send_text(from_number, respuesta_venta)
-                await ycloud.send_text(from_number, resultado_stock["mensaje"])
-                logger.error(f"[Stock] Error en descuento: {resultado_stock['mensaje']}")
+            # ── CASO C: sin match → preguntar si agregar o seguir sin stock ──
+            elif estado_stock == "sin_match":
+                msg_decision = (
+                    f"Este producto no está en tu catálogo 🔍\n\n"
+                    f"¿Qué quieres hacer?\n"
+                    f"1️⃣ *Agregar* al catálogo\n"
+                    f"2️⃣ *Seguir* sin añadir al stock\n\n"
+                    f"_(La venta se registrará cuando elijas)_"
+                )
+                await onboarding_service.upsert_sesion(
+                    negocio_id_str, "ESPERANDO_DECISION_PRODUCTO_NUEVO", datos_venta_pendiente
+                )
+                await ycloud.send_text(from_number, msg_decision)
 
             if es_audio:
                 await _responder_con_voz(from_number, respuesta)
             return
+
 
         # ── Intent GASTO ──
         elif intent == "GASTO" and datos.get("monto"):
@@ -711,6 +844,7 @@ async def _guardar_transaccion_retornando_id(
     fecha: str = None,
     hora: str = None,
     cantidad: int = 1,
+    producto_id: str | None = None,
 ) -> str | None:
     """
     Guarda la transacción y retorna su UUID como string.
@@ -729,26 +863,27 @@ async def _guardar_transaccion_retornando_id(
             row = await conn.fetchrow(
                 """
                 INSERT INTO transacciones
-                    (negocio_id, tipo, descripcion, monto, moneda, fecha, hora, origen_registro, cantidad)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp', $8)
+                    (negocio_id, tipo, descripcion, monto, moneda, fecha, hora, origen_registro, cantidad, producto_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp', $8, $9)
                 RETURNING id::text
                 """,
-                negocio_id, tipo, descripcion, float(monto), moneda, fecha_obj, hora_obj, cantidad,
+                negocio_id, tipo, descripcion, float(monto), moneda, fecha_obj, hora_obj, cantidad, producto_id,
             )
         else:
             row = await conn.fetchrow(
                 """
                 INSERT INTO transacciones
-                    (negocio_id, tipo, descripcion, monto, moneda, fecha, origen_registro, cantidad)
-                VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, 'whatsapp', $6)
+                    (negocio_id, tipo, descripcion, monto, moneda, fecha, origen_registro, cantidad, producto_id)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, 'whatsapp', $6, $7)
                 RETURNING id::text
                 """,
-                negocio_id, tipo, descripcion, float(monto), moneda, cantidad,
+                negocio_id, tipo, descripcion, float(monto), moneda, cantidad, producto_id,
             )
 
     tx_id = row["id"] if row else None
-    logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto} | id={tx_id}")
+    logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto} | id={tx_id} | producto_id={producto_id}")
     return tx_id
+
 
 
 async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:

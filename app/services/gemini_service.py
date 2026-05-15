@@ -916,4 +916,203 @@ Responde ÚNICAMENTE con JSON válido:
             return {"accion": "DESCONOCIDO"}
 
 
-gemini_service = GeminiService()
+    async def extraer_nombre_y_talla(self, texto_producto: str) -> dict:
+        """
+        Dado el nombre de producto tal como lo dijo el usuario (ej: "polo básico talla L"),
+        extrae por separado el nombre limpio y la talla.
+
+        Retorna:
+        {
+          "nombre": "Polo Básico",   ← sin la talla, capitalizado
+          "talla": "L"               ← solo la talla en mayúsculas, o null
+        }
+        """
+        prompt = (
+            f'El comerciante mencionó este producto: "{texto_producto}"\n\n'
+            f'Extrae el nombre del producto SIN la talla, y la talla por separado.\n'
+            f'Responde SOLO con JSON válido:\n'
+            f'{{\n'
+            f'  "nombre": "nombre capitalizado sin talla, ej: Polo Básico",\n'
+            f'  "talla": "solo la talla en MAYÚSCULAS, ej: L, M, XL, 28 — o null si no hay"\n'
+            f'}}\n\n'
+            f'Ejemplos:\n'
+            f'"polo básico talla L" → {{"nombre":"Polo Básico","talla":"L"}}\n'
+            f'"jean slim 28" → {{"nombre":"Jean Slim","talla":"28"}}\n'
+            f'"casaca de cuero" → {{"nombre":"Casaca De Cuero","talla":null}}\n'
+            f'"blusa floral talla única" → {{"nombre":"Blusa Floral","talla":"ÚNICA"}}'
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Eres un extractor de datos de productos. Responde SOLO con JSON válido.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=64,
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
+            resultado = json.loads(raw)
+            if isinstance(resultado.get("nombre"), str):
+                resultado["nombre"] = resultado["nombre"].strip().title()
+            if isinstance(resultado.get("talla"), str):
+                resultado["talla"] = resultado["talla"].strip().upper()
+            logger.info(f"[Groq] extraer_nombre_y_talla '{texto_producto}' → {resultado}")
+            return resultado
+        except Exception as e:
+            logger.error(f"[Groq] extraer_nombre_y_talla error: {e}")
+            return {"nombre": texto_producto.strip().title(), "talla": None}
+
+    async def interpretar_decision_producto_nuevo(self, mensaje: str) -> dict:
+        """
+        Clasifica la respuesta del usuario cuando se le preguntó si quiere
+        agregar un producto nuevo al catálogo o continuar sin stock.
+
+        Retorna:
+        {
+          "accion": "AGREGAR" | "CONTINUAR" | "CANCELAR" | "DESCONOCIDO"
+        }
+        """
+        prompt = f"""El bot le preguntó al comerciante si quiere agregar un producto nuevo a su catálogo o continuar sin stock.
+El comerciante respondió: "{mensaje}"
+
+Clasifica su respuesta en UNA de estas acciones:
+AGREGAR   → quiere agregar el producto al catálogo. Señales: "agregar", "sí", "si", "1", "dale", "ok", "quiero", "agrégalo".
+CONTINUAR → quiere seguir sin añadir al stock. Señales: "no", "seguir", "2", "así está bien", "sin stock", "no importa", "omitir".
+CANCELAR  → quiere cancelar la venta completa. Señales: "cancelar", "cancela", "no quiero", "borra".
+DESCONOCIDO → no se puede determinar.
+
+Responde ÚNICAMENTE con JSON válido:
+{{"accion": "AGREGAR|CONTINUAR|CANCELAR|DESCONOCIDO"}}"""
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Eres un clasificador de intenciones. Responde SOLO con JSON válido.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=32,
+            )
+            raw = response.choices[0].message.content.strip()
+            resultado = self._parsear(raw)
+            accion = resultado.get("accion", "DESCONOCIDO").upper()
+            logger.info(f"[Groq] interpretar_decision_producto_nuevo → {accion}")
+            return {"accion": accion}
+        except Exception as e:
+            logger.error(f"[Groq] interpretar_decision_producto_nuevo error: {e}")
+            msg = mensaje.strip().lower()
+            if any(w in msg for w in ["agregar", "sí", "si", "1", "dale", "ok"]):
+                return {"accion": "AGREGAR"}
+            if any(w in msg for w in ["no", "seguir", "2", "omitir", "sin stock"]):
+                return {"accion": "CONTINUAR"}
+            if any(w in msg for w in ["cancelar", "cancela"]):
+                return {"accion": "CANCELAR"}
+            return {"accion": "DESCONOCIDO"}
+
+    async def interpretar_formulario_producto_venta(
+        self, mensaje: str, formulario_actual: dict
+    ) -> dict:
+        """
+        Dado el formulario actual del producto nuevo (con datos ya extraídos)
+        y el mensaje del usuario, determina:
+        - Si quiere GUARDAR el producto tal como está
+        - Si quiere CANCELAR
+        - O qué campos quiere editar (nombre, talla, stock, precio_venta, precio_compra)
+
+        Retorna:
+        {
+          "accion": "GUARDAR" | "CANCELAR" | "EDITAR",
+          "cambios": {    ← solo si accion == "EDITAR"
+            "nombre": str | null,
+            "talla": str | null,
+            "stock": int | null,
+            "precio_venta": float | null,
+            "precio_compra": float | null
+          }
+        }
+        """
+        formulario_txt = (
+            f"Nombre: {formulario_actual.get('nombre', '?')}\n"
+            f"Talla: {formulario_actual.get('talla', '(no especificada)')}\n"
+            f"Stock: {formulario_actual.get('stock', '(no especificado)')}\n"
+            f"Precio de Venta: {formulario_actual.get('precio_venta', '?')}\n"
+            f"Precio de Compra: {formulario_actual.get('precio_compra', '(no especificado)')}"
+        )
+        prompt = f"""El bot mostró este formulario de producto al comerciante:
+{formulario_txt}
+
+El comerciante respondió: "{mensaje}"
+
+Determina su intención:
+GUARDAR  → acepta el formulario. Señales: "guardar", "está bien", "listo", "sí", "ok", "dale", "así", "perfecto", "confirmar".
+CANCELAR → cancela la operación. Señales: "cancelar", "no quiero", "cancela".
+EDITAR   → quiere cambiar uno o más campos. Extrae los nuevos valores mencionados.
+
+Responde SOLO con JSON válido:
+{{"accion": "GUARDAR|CANCELAR|EDITAR", "cambios": {{"nombre": null, "talla": null, "stock": null, "precio_venta": null, "precio_compra": null}}}}
+
+Reglas para EDITAR:
+- Solo incluye en "cambios" los campos que el usuario explícitamente mencionó cambiar.
+- stock: número entero. precio_venta y precio_compra: números decimales. talla: string en mayúsculas.
+- Ejemplo: "quiero agregar stock 30 y precio de compra 15" → {{"accion":"EDITAR","cambios":{{"stock":30,"precio_compra":15.0}}}}
+- Si no menciona un campo, déjalo en null."""
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Eres un extractor de intenciones y datos. Responde SOLO con JSON válido.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=128,
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
+            resultado = json.loads(raw)
+            accion = resultado.get("accion", "DESCONOCIDO").upper()
+            cambios = resultado.get("cambios", {}) or {}
+            # Normalizar tipos
+            if cambios.get("stock") is not None:
+                try:
+                    cambios["stock"] = int(cambios["stock"])
+                except (ValueError, TypeError):
+                    cambios["stock"] = None
+            if cambios.get("precio_venta") is not None:
+                try:
+                    cambios["precio_venta"] = float(cambios["precio_venta"])
+                except (ValueError, TypeError):
+                    cambios["precio_venta"] = None
+            if cambios.get("precio_compra") is not None:
+                try:
+                    cambios["precio_compra"] = float(cambios["precio_compra"])
+                except (ValueError, TypeError):
+                    cambios["precio_compra"] = None
+            if isinstance(cambios.get("talla"), str):
+                cambios["talla"] = cambios["talla"].strip().upper()
+            if isinstance(cambios.get("nombre"), str):
+                cambios["nombre"] = cambios["nombre"].strip().title()
+            logger.info(f"[Groq] interpretar_formulario_producto_venta accion={accion} cambios={cambios}")
+            return {"accion": accion, "cambios": cambios}
+        except Exception as e:
+            logger.error(f"[Groq] interpretar_formulario_producto_venta error: {e}")
+            msg = mensaje.strip().lower()
+            if any(w in msg for w in ["guardar", "listo", "ok", "sí", "si", "dale", "bien", "confirmar"]):
+                return {"accion": "GUARDAR", "cambios": {}}
+            if any(w in msg for w in ["cancelar", "cancela"]):
+                return {"accion": "CANCELAR", "cambios": {}}
+            return {"accion": "EDITAR", "cambios": {}}
+
+
+gemini_service = GeminiService()
+

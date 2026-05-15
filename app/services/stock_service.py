@@ -91,6 +91,7 @@ class StockService:
         precio_venta: float | None,
         precio_costo: float | None,
         cantidad_inicial: int,
+        talla: str | None = None,
         categoria_id: str | None = None,
     ) -> str:
         """
@@ -104,12 +105,13 @@ class StockService:
                     """
                     INSERT INTO productos
                         (negocio_id, categoria_id, nombre, talla, precio_venta_pen, precio_costo, activo)
-                    VALUES ($1, $2, $3, NULL, $4, $5, true)
+                    VALUES ($1, $2, $3, $4, $5, $6, true)
                     RETURNING id::text
                     """,
                     negocio_id,
                     categoria_id,
                     nombre.strip().title(),
+                    talla.strip().upper() if talla else None,
                     precio_venta,
                     precio_costo,
                 )
@@ -138,8 +140,36 @@ class StockService:
                         cantidad_inicial,
                     )
 
-        logger.info(f"[Stock] Producto creado: '{nombre}' id={producto_id}")
+        logger.info(f"[Stock] Producto creado: '{nombre}' talla={talla} id={producto_id}")
         return producto_id
+
+    async def vincular_producto_transaccion(
+        self,
+        transaccion_id: str,
+        producto_id: str,
+    ) -> None:
+        """
+        Actualiza el producto_id en una transacción ya registrada.
+        También sincroniza la categoria_id desde el producto.
+        """
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            producto = await conn.fetchrow(
+                "SELECT categoria_id FROM productos WHERE id = $1",
+                producto_id,
+            )
+            categoria_id = producto["categoria_id"] if producto else None
+            await conn.execute(
+                """
+                UPDATE transacciones
+                SET producto_id = $1, categoria_id = COALESCE($2, categoria_id)
+                WHERE id = $3::uuid
+                """,
+                producto_id,
+                categoria_id,
+                transaccion_id,
+            )
+        logger.info(f"[Stock] Transacción {transaccion_id} vinculada a producto {producto_id}")
 
     async def agregar_variante(self, producto_id: str, variante: str) -> None:
         """
@@ -242,22 +272,22 @@ class StockService:
         nombre_producto: str,
         cantidad: int,
         precio_unitario: float | None,
-        transaccion_id: str | None = None,
     ) -> dict:
         """
-        Punto de entrada desde webhook.py después de registrar la transacción.
+        SOLO hace matching del producto. NO registra transacción ni descuenta stock.
+        El webhook decide qué hacer según el resultado.
 
         Retorna:
         {
-          "estado": "descontado" | "pendiente_seleccion" | "pendiente_confirmacion",
-          "mensaje": str,                  — texto a enviar al comerciante
-          "alerta_stock": bool,            — True si quedó stock bajo
-          "producto_id": str | None,
-          "candidatos": [...] | None,      — solo si estado=pendiente_seleccion
+          "estado": "exacto" | "parcial" | "sin_match",
+          "producto_id": str | None,       — solo si exacto
+          "producto_nombre": str | None,   — solo si exacto
+          "producto_talla": str | None,    — solo si exacto
+          "candidatos": [...] | None,      — solo si parcial
         }
         """
         logger.info(
-            f"[Stock] procesar_venta negocio={negocio_id} "
+            f"[Stock] procesar_venta (matching) negocio={negocio_id} "
             f"producto='{nombre_producto}' cant={cantidad}"
         )
 
@@ -270,105 +300,122 @@ class StockService:
             candidatos=candidatos,
         )
 
-        # ── CASO A: match exacto → descontar directo ──
+        # ── CASO A: match exacto ──
         if resolucion["match"] == "exacto":
             producto_id = resolucion["producto_id"]
-            try:
-                resultado = await self.descontar_stock_bd(
-                    producto_id=producto_id,
-                    negocio_id=negocio_id,
-                    cantidad=cantidad,
-                    transaccion_id=transaccion_id,
-                )
-                # Aprender la variante si el nombre buscado difiere del nombre oficial
-                producto = await self.get_producto(producto_id)
-                if producto and nombre_producto.lower() != producto["nombre"].lower():
-                    await self.agregar_variante(producto_id, nombre_producto)
+            producto = await self.get_producto(producto_id)
+            return {
+                "estado": "exacto",
+                "producto_id": producto_id,
+                "producto_nombre": producto["nombre"] if producto else nombre_producto,
+                "producto_talla": producto.get("talla") if producto else None,
+                "candidatos": None,
+            }
 
-                if transaccion_id and producto and producto.get("categoria_id"):
-                    pool = await get_pool()
-                    async with pool.acquire() as conn:
-                        await conn.execute(
-                            "UPDATE transacciones SET categoria_id = $1 WHERE id = $2::uuid",
-                            producto["categoria_id"], transaccion_id
-                        )
-
-                alerta = resultado.get("alerta_stock", False)
-                cantidad_restante = resultado.get("cantidad_despues", "?")
-                str_talla = f" Talla {producto['talla']}" if producto.get("talla") else ""
-                mensaje = f"📦 Stock actualizado: quedan {cantidad_restante} unidades de {producto['nombre']}{str_talla}."
-                if alerta:
-                    mensaje += f"\n⚠️ Stock bajo — menos del mínimo ({resultado.get('cantidad_minima')} unid.)."
-
-                return {
-                    "estado": "descontado",
-                    "mensaje": mensaje,
-                    "alerta_stock": alerta,
-                    "producto_id": producto_id,
-                    "producto_nombre": producto["nombre"],
-                    "producto_talla": producto.get("talla"),
-                    "candidatos": None,
-                }
-
-            except Exception as e:
-                logger.error(f"[Stock] Error descontando: {e}")
-                prod = await self.get_producto(producto_id)
-                p_nombre = prod["nombre"] if prod else nombre_producto
-                p_talla = prod.get("talla") if prod else None
-                
-                if "insuficiente" in str(e).lower() or "check constraint" in str(e).lower():
-                    msg_error = f"⚠️ No pude descontar el stock: no hay unidades suficientes registradas."
-                else:
-                    msg_error = f"⚠️ Hubo un problema al descontar el stock."
-
-                return {
-                    "estado": "error_stock",
-                    "mensaje": msg_error,
-                    "alerta_stock": False,
-                    "producto_id": producto_id,
-                    "producto_nombre": p_nombre,
-                    "producto_talla": p_talla,
-                    "candidatos": None,
-                }
-
-        # ── CASO B: match parcial → preguntar al comerciante ──
+        # ── CASO B: match parcial → lista de candidatos ──
         elif resolucion["match"] == "parcial":
             ids_candidatos = resolucion["candidatos_ids"]
-            productos_info = []
-            for c in candidatos:
-                if c["id"] in ids_candidatos:
-                    productos_info.append(c)
-
-            lista = "\n".join(
-                f"{i+1}. {p['nombre']}" + (f", Talla: {p['talla']}" if p.get("talla") else "") + f" (stock: {p.get('cantidad_actual', '?')})"
-                for i, p in enumerate(productos_info)
-            )
-            mensaje = (
-                f"¿Cuál de estos vendiste? 🤔\n\n"
-                f"{lista}\n\n"
-                f"Escribe el número."
-            )
+            productos_info = [c for c in candidatos if c["id"] in ids_candidatos]
+            # Si ninguno filtró (todos los candidatos), usar todos
+            if not productos_info:
+                productos_info = candidatos
             return {
-                "estado": "pendiente_seleccion",
-                "mensaje": mensaje,
-                "alerta_stock": False,
+                "estado": "parcial",
                 "producto_id": None,
+                "producto_nombre": None,
+                "producto_talla": None,
                 "candidatos": productos_info,
             }
 
-        # ── CASO C: ningún match → preguntar si crear ──
+        # ── CASO C: sin match ──
         else:
-            mensaje = await gemini_service.confirmar_producto_nuevo(
-                nombre=nombre_producto,
-                precio=precio_unitario,
-                cantidad=cantidad,
-            )
             return {
-                "estado": "pendiente_confirmacion",
-                "mensaje": mensaje,
-                "alerta_stock": False,
+                "estado": "sin_match",
                 "producto_id": None,
+                "producto_nombre": None,
+                "producto_talla": None,
                 "candidatos": None,
+            }
+
+    async def ejecutar_descuento_venta(
+        self,
+        negocio_id: str,
+        producto_id: str,
+        nombre_producto: str,
+        cantidad: int,
+        transaccion_id: str | None = None,
+    ) -> dict:
+        """
+        Ejecuta el descuento de stock una vez que el producto está resuelto.
+        Aprende la variante si el nombre difiere. Actualiza categoria_id en la transacción.
+
+        Retorna:
+        {
+          "ok": bool,
+          "mensaje_stock": str,
+          "alerta_stock": bool,
+          "cantidad_restante": int | str,
+          "producto_nombre": str,
+          "producto_talla": str | None,
+        }
+        """
+        try:
+            resultado = await self.descontar_stock_bd(
+                producto_id=producto_id,
+                negocio_id=negocio_id,
+                cantidad=cantidad,
+                transaccion_id=transaccion_id,
+            )
+            producto = await self.get_producto(producto_id)
+
+            # Aprender variante
+            if producto and nombre_producto.lower() != producto["nombre"].lower():
+                await self.agregar_variante(producto_id, nombre_producto)
+
+            # Sincronizar categoria_id en la transacción
+            if transaccion_id and producto and producto.get("categoria_id"):
+                pool = await get_pool()
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE transacciones SET categoria_id = $1 WHERE id = $2::uuid",
+                        producto["categoria_id"], transaccion_id,
+                    )
+
+            alerta = resultado.get("alerta_stock", False)
+            cantidad_restante = resultado.get("cantidad_despues", "?")
+            p_nombre = producto["nombre"] if producto else nombre_producto
+            p_talla = producto.get("talla") if producto else None
+            str_talla = f" Talla {p_talla}" if p_talla else ""
+
+            mensaje_stock = f"📦 Quedan {cantidad_restante} unidades de {p_nombre}{str_talla}."
+            if alerta:
+                mensaje_stock += f"\n⚠️ Stock bajo del mínimo ({resultado.get('cantidad_minima')} unid.)."
+
+            return {
+                "ok": True,
+                "mensaje_stock": mensaje_stock,
+                "alerta_stock": alerta,
+                "cantidad_restante": cantidad_restante,
+                "producto_nombre": p_nombre,
+                "producto_talla": p_talla,
+            }
+
+        except Exception as e:
+            logger.error(f"[Stock] Error descontando: {e}")
+            prod = await self.get_producto(producto_id)
+            p_nombre = prod["nombre"] if prod else nombre_producto
+            p_talla = prod.get("talla") if prod else None
+            if "insuficiente" in str(e).lower() or "check constraint" in str(e).lower():
+                msg_error = "⚠️ No pude descontar el stock: no hay unidades suficientes registradas."
+            else:
+                msg_error = "⚠️ Hubo un problema al descontar el stock."
+            return {
+                "ok": False,
+                "mensaje_stock": msg_error,
+                "alerta_stock": False,
+                "cantidad_restante": "?",
+                "producto_nombre": p_nombre,
+                "producto_talla": p_talla,
             }
 
     async def procesar_inventario(
