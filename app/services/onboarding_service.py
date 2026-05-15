@@ -67,6 +67,7 @@ def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: li
     if sugerencia.get("match"):
         cat_linea = f"📂 Categoría: *{sugerencia['categoria']}* ✅\n"
         cat_instruccion = ""
+        pregunta_final = "¿Quieres editar el producto, agregar otro producto o terminar el inventario? 😊"
     else:
         cat_linea = "📂 Categoría: _ninguna coincide_\n"
         cats_txt = ", ".join(categorias) if categorias else "—"
@@ -75,6 +76,7 @@ def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: li
             f"Categorías disponibles: _{cats_txt}_\n"
             f"Escribe *categoría NombreExistente* o *categoría NombreNuevo* para crear una.\n\n"
         )
+        pregunta_final = "¿O prefieres guardar el producto sin categoría? Escribe 'sí' para guardar, o 'corregir'."
 
     return (
         f"📝 Producto: *{producto['nombre']}*\n"
@@ -83,8 +85,8 @@ def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: li
         f"💰 Precio venta: S/ {producto['precio_venta']:.2f}\n"
         f"{compra_linea}"
         f"{cat_linea}"
-        f"{cat_instruccion}\n"
-        f"¿Todo bien o quieres agregar otro / editar algo? 😊"
+        f"{cat_instruccion}"
+        f"{pregunta_final}"
     )
 
 
