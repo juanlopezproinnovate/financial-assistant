@@ -304,6 +304,8 @@ class StockService:
                     "mensaje": mensaje,
                     "alerta_stock": alerta,
                     "producto_id": producto_id,
+                    "producto_nombre": producto["nombre"],
+                    "producto_talla": producto.get("talla"),
                     "candidatos": None,
                 }
 
@@ -507,7 +509,13 @@ class StockService:
             mensaje = f"📦 Listo. Quedan {cantidad_restante} unidades de {producto['nombre']}{str_talla}."
             if alerta:
                 mensaje += f"\n⚠️ Stock bajo del mínimo."
-            return {"estado": "descontado", "mensaje": mensaje, "alerta_stock": alerta}
+            return {
+                "estado": "descontado", 
+                "mensaje": mensaje, 
+                "alerta_stock": alerta,
+                "producto_nombre": producto["nombre"],
+                "producto_talla": producto.get("talla"),
+            }
 
         elif operacion == "inventario_entrada":
             resultado = await self.reponer_stock_bd(

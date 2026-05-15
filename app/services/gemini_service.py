@@ -141,7 +141,7 @@ Pesos, CLP â†’ "CLP"
 Sin moneda â†’ asumir "PEN"
 
 EJEMPLOS:
-"vendÃ­ 2 polos a 70 soles" â†’ VENTA, producto:"polo", cantidad:2, precio_unitario:35, total:70, moneda:PEN
+"vendÃ­ 1 polo talla M a 90 soles" â†’ VENTA, producto:"polo talla m", cantidad:1, precio_unitario:90, total:90, moneda:PEN
 "vendÃ­ 3 polos a 25 soles cada uno" â†’ VENTA, producto:"polo", cantidad:3, precio_unitario:25, total:75, moneda:PEN
 "gastÃ© 200 en pasajes a Bolivia" â†’ GASTO, concepto:pasajes Bolivia, monto:200, moneda:PEN, categoria:transporte
 "llegaron 50 blusas rojas talla S a S/15" â†’ INVENTARIO, tipo:entrada, producto:"blusa roja talla S", cantidad:50, precio_costo:15, moneda:PEN
