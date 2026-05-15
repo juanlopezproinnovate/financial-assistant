@@ -289,13 +289,14 @@ class OnboardingService:
             row = await conn.fetchrow(
                 """
                 INSERT INTO productos
-                    (negocio_id, nombre, nombre_variantes, precio_venta_pen, precio_costo, unidad, activo, categoria_id)
+                    (negocio_id, nombre, talla, nombre_variantes, precio_venta_pen, precio_costo, unidad, activo, categoria_id)
                 VALUES
-                    ($1, $2, $3, $4, $5, 'unidad', true, $6)
+                    ($1, $2, $3, $4, $5, $6, 'unidad', true, $7)
                 RETURNING id
                 """,
                 negocio_id,
                 nombre.strip(),
+                talla,
                 variantes,
                 precio_venta,
                 precio_costo,
@@ -939,6 +940,31 @@ class OnboardingService:
 
             # ── Sub-paso: parsear respuesta del formulario completo ──
             if sub_paso == SUB_PASO_COMPLETO:
+                # ── Interceptar si cambia de opinión ──
+                if any(w in msg_lower for w in ["después", "despues", "luego", "dashboard", "web", "link", "mas tarde", "más tarde"]):
+                    await self.completar_onboarding(negocio_id)
+                    await self.upsert_sesion(negocio_id, "activo", {})
+                    nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
+                    nombre_prop    = datos_temp.get("nombre_propietario", "")
+                    
+                    es_dashboard = any(w in msg_lower for w in ["dashboard", "web", "link"])
+                    extra_msg = (
+                        "¡Perfecto! 🖥️ Puedes cargar tu inventario completo desde el Dashboard aquí:\n👉 https://quri.app/\n\n"
+                        if es_dashboard else
+                        "¡No hay problema! Puedes ir agregando tus productos conforme vayas vendiendo. 😊\n\n"
+                    )
+                    
+                    return (
+                        extra_msg +
+                        f"¡Todo listo, {nombre_prop}! 🎉\n\n"
+                        f"*{nombre_negocio}* ya está configurado en Quri.\n\n"
+                        "Ahora puedes registrar tus operaciones fácilmente:\n"
+                        "📦 _'Vendí 3 polos a S/25 cada uno'_\n"
+                        "💸 _'Gasté S/200 en mercadería'_\n"
+                        "📊 _'¿Cuánto vendí hoy?'_\n\n"
+                        "¡Estoy aquí para ayudarte! 💪"
+                    )
+
                 # ── LLM extrae todos los campos del mensaje libre ──
                 campos = await gemini_service.extraer_producto_inventario(mensaje)
 

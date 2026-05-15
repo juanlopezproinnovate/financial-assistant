@@ -102,8 +102,8 @@ class StockService:
                 row = await conn.fetchrow(
                     """
                     INSERT INTO productos
-                        (negocio_id, categoria_id, nombre, precio_venta_pen, precio_costo, activo)
-                    VALUES ($1, $2, $3, $4, $5, true)
+                        (negocio_id, categoria_id, nombre, talla, precio_venta_pen, precio_costo, activo)
+                    VALUES ($1, $2, $3, NULL, $4, $5, true)
                     RETURNING id::text
                     """,
                     negocio_id,
