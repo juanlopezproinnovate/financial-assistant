@@ -231,6 +231,28 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                         operacion       = operacion,
                     )
                     await onboarding_service.upsert_sesion(negocio_id_str, "activo", {})
+                    
+                    if operacion == "venta":
+                        prod_nombre = resultado.get("producto_nombre", nombre_orig)
+                        prod_talla = resultado.get("producto_talla")
+                        if prod_talla:
+                            prod_nombre += f" Talla {prod_talla}"
+                        
+                        monto = datos_temp.get("venta_monto", 0)
+                        simbolo = datos_temp.get("venta_moneda", "S/")
+                        f_fecha = datos_temp.get("venta_fecha", "")
+                        f_hora = datos_temp.get("venta_hora", "")
+                        nombre_propio = datos_temp.get("venta_nombre_propio", "Comerciante")
+                        
+                        respuesta_venta = (
+                            f'✅ Venta registrada, {nombre_propio}\n\n'
+                            f"📅 {f_fecha} {f_hora}\n"
+                            f"📝 Producto: {prod_nombre}\n"
+                            f"📦 Cantidad: {cantidad}\n"
+                            f"💰 Total: {simbolo} {monto:.2f}"
+                        )
+                        await ycloud.send_text(from_number, respuesta_venta)
+
                     await ycloud.send_text(from_number, resultado["mensaje"])
                 else:
                     await ycloud.send_text(
@@ -446,23 +468,6 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 cantidad    = cantidad,
             )
 
-            respuesta = (
-                f'✅ Venta registrada, {nombre_propio}\n\n'
-                f"📅 {f_fecha} {f_hora}\n"
-                f"📝 Producto: {nombre_producto}\n"
-                f"📦 Cantidad: {cantidad}\n"
-                f"💰 Total: {simbolo} {datos.get('total', 0):.2f}"
-            )
-            await ycloud.send_text(from_number, respuesta)
-
-            # Guardar en historial
-            try:
-                await onboarding_service.guardar_en_historial(
-                    negocio_id_str, sesion, text, respuesta
-                )
-            except Exception as e:
-                logger.warning(f"[Historial] No se pudo guardar VENTA: {e}")
-
             resultado_stock = await stock_service.procesar_venta(
                 negocio_id      = negocio_id_str,
                 nombre_producto = nombre_producto,
@@ -473,8 +478,33 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
 
             estado_stock = resultado_stock["estado"]
 
+            def _generar_msg_venta(nombre_final: str):
+                return (
+                    f'✅ Venta registrada, {nombre_propio}\n\n'
+                    f"📅 {f_fecha} {f_hora}\n"
+                    f"📝 Producto: {nombre_final}\n"
+                    f"📦 Cantidad: {cantidad}\n"
+                    f"💰 Total: {simbolo} {datos.get('total', 0):.2f}"
+                )
+
             if estado_stock == "descontado":
-                if resultado_stock.get("alerta_stock"):
+                prod_nombre = resultado_stock.get("producto_nombre", nombre_producto)
+                prod_talla = resultado_stock.get("producto_talla")
+                if prod_talla:
+                    prod_nombre += f" Talla {prod_talla}"
+                
+                respuesta_venta = _generar_msg_venta(prod_nombre)
+                await ycloud.send_text(from_number, respuesta_venta)
+                
+                # Guardar en historial
+                try:
+                    await onboarding_service.guardar_en_historial(
+                        negocio_id_str, sesion, text, respuesta_venta
+                    )
+                except Exception as e:
+                    logger.warning(f"[Historial] No se pudo guardar VENTA: {e}")
+
+                if resultado_stock.get("alerta_stock") or resultado_stock.get("mensaje"):
                     await ycloud.send_text(from_number, resultado_stock["mensaje"])
 
             elif estado_stock == "pendiente_seleccion":
@@ -488,11 +518,27 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                         "nombre_producto_original":  nombre_producto,
                         "precio_unitario_stock":     precio_unitario,
                         "transaccion_id":            transaccion_id,
+                        "venta_monto":               datos.get('total', 0),
+                        "venta_moneda":              simbolo,
+                        "venta_fecha":               f_fecha,
+                        "venta_hora":                f_hora,
+                        "venta_nombre_propio":       nombre_propio,
                     },
                 )
                 await ycloud.send_text(from_number, resultado_stock["mensaje"])
 
             elif estado_stock == "pendiente_confirmacion":
+                respuesta_venta = _generar_msg_venta(nombre_producto)
+                await ycloud.send_text(from_number, respuesta_venta)
+                
+                # Guardar en historial
+                try:
+                    await onboarding_service.guardar_en_historial(
+                        negocio_id_str, sesion, text, respuesta_venta
+                    )
+                except Exception as e:
+                    pass
+
                 await onboarding_service.upsert_sesion(
                     negocio_id_str,
                     "ESPERANDO_CONFIRMACION_PRODUCTO_NUEVO",
@@ -507,6 +553,8 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 await ycloud.send_text(from_number, resultado_stock["mensaje"])
 
             elif estado_stock == "error_stock":
+                respuesta_venta = _generar_msg_venta(nombre_producto)
+                await ycloud.send_text(from_number, respuesta_venta)
                 logger.error(f"[Stock] Error en descuento: {resultado_stock['mensaje']}")
 
             if es_audio:
