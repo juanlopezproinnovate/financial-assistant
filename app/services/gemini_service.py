@@ -651,10 +651,17 @@ No incluyas texto adicional ni markdown."""
         """
         contexto_txt = ""
         if producto_actual:
+            para_mostrar = {
+                "nombre": producto_actual.get("nombre"),
+                "talla": producto_actual.get("talla"),
+                "precio_venta": producto_actual.get("precio_venta"),
+                "cantidad": producto_actual.get("cantidad"),
+                "precio_compra": producto_actual.get("precio_compra"),
+            }
             contexto_txt = (
                 f"El usuario está completando paso a paso los datos de un producto.\n"
-                f"Actualmente tenemos:\n{json.dumps(producto_actual, indent=2)}\n"
-                f"Los campos en null son los que faltan. Si el usuario envía un texto corto (ej: 'L', '20'), asúmelo para el próximo campo faltante lógico.\n\n"
+                f"Actualmente tenemos:\n{json.dumps(para_mostrar, indent=2)}\n"
+                f"Los campos en null son los que faltan. Si el usuario envía un texto corto (ej: 'L', '120'), asúmelo para el PRIMER campo faltante (el primer null en el orden de arriba).\n\n"
             )
 
         prompt = (
