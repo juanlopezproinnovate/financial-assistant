@@ -850,8 +850,8 @@ REGLAS:
 El usuario responde: "{mensaje}"
 
 Clasifica su intención en UNA de estas acciones:
-TERMINAR → Señales: "todo bien", "sí", "queda", "listo", "está bien", "ok", "ya", "terminé".
-AGREGAR_OTRO → Señales: "otro", "quiero agregar otro", "más", "uno más", "agrega otro", "sí, otro".
+TERMINAR → Señales: "todo bien", "sí", "queda", "listo", "está bien", "ok", "ya", "terminé", "siguiente fase", "pasar a la siguiente".
+AGREGAR_OTRO → Señales: "otro", "quiero agregar otro", "más", "uno más", "agrega otro", "sí, otro", "agregar esto".
 CORREGIR → Señales: "editar", "mal", "error", "no", "corregir", "cambiar".
 DESCONOCIDO → No se puede determinar.
 

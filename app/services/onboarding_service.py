@@ -74,7 +74,8 @@ def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: li
         cat_instruccion = (
             f"\n¿Quieres asignarle una categoría?\n"
             f"Categorías disponibles: _{cats_txt}_\n"
-            f"Escribe *categoría NombreExistente* o *categoría NombreNuevo* para crear una.\n\n"
+            f"Escribe *categoría [Nombre]* para asignarla o crear una nueva.\n"
+            f"_(Yo me encargaré de poner la primera letra en mayúscula y corregir la ortografía)_ ✨\n\n"
         )
         pregunta_final = "¿O prefieres guardar el producto sin categoría? Escribe 'sí' para guardar, o 'corregir'."
 
