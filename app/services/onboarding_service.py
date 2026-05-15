@@ -62,7 +62,7 @@ SUB_PASO_CONFIRMAR = "confirmar"
 
 def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: list[str]) -> str:
     """Arma el mensaje de resumen + categoría + solicitud de confirmación."""
-    etiqueta_linea = f"🏷️ Etiqueta: {producto['etiqueta']}\n" if producto.get("etiqueta") else ""
+    compra_linea = f"🏷️ Precio compra: S/ {producto['precio_compra']:.2f}\n" if producto.get("precio_compra") else ""
 
     if sugerencia.get("match"):
         cat_linea = f"📂 Categoría: *{sugerencia['categoria']}* ✅\n"
@@ -73,20 +73,21 @@ def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: li
         cat_instruccion = (
             f"\n¿Quieres asignarle una categoría?\n"
             f"Categorías disponibles: _{cats_txt}_\n"
-            f"Escribe *categoría NombreExistente* o *categoría NombreNuevo* para crear una.\n"
-            f"O escribe *sí* para guardar sin categoría.\n\n"
+            f"Escribe *categoría NombreExistente* o *categoría NombreNuevo* para crear una.\n\n"
         )
 
     return (
         f"¿Confirmas estos datos?\n\n"
         f"📝 Producto: *{producto['nombre']}*\n"
         f"📐 Talla: {producto['talla']}\n"
-        f"💰 Precio: S/ {producto['precio_venta']:.2f}\n"
         f"📦 Stock: {producto['cantidad']} unidades\n"
-        f"{etiqueta_linea}"
+        f"💰 Precio venta: S/ {producto['precio_venta']:.2f}\n"
+        f"{compra_linea}"
         f"{cat_linea}"
-        f"{cat_instruccion}"
-        f"✅ Escribe *sí* para guardar · ✏️ Escribe *no* para corregir"
+        f"{cat_instruccion}\n"
+        f"✅ Escribe *queda* o *listo* para guardar y terminar\n"
+        f"➕ Escribe *otro* para guardar y agregar uno más\n"
+        f"✏️ Escribe *corregir* si hay un error en los datos"
     )
 
 
@@ -263,6 +264,7 @@ class OnboardingService:
         talla: str,
         precio_venta: float,
         cantidad: int,
+        precio_costo: float | None = None,
         etiqueta: str | None = None,
         categoria_nombre: str | None = None,
     ) -> str:
@@ -270,7 +272,6 @@ class OnboardingService:
         Inserta un producto en `productos` y crea su registro en `stock`.
         Retorna el producto_id creado.
         El campo nombre_variantes se usa para almacenar la talla.
-        La etiqueta se guarda como variante adicional si fue provista.
         """
         pool = await get_pool()
 
@@ -288,15 +289,16 @@ class OnboardingService:
             row = await conn.fetchrow(
                 """
                 INSERT INTO productos
-                    (negocio_id, nombre, nombre_variantes, precio_venta_pen, unidad, activo, categoria_id)
+                    (negocio_id, nombre, nombre_variantes, precio_venta_pen, precio_costo, unidad, activo, categoria_id)
                 VALUES
-                    ($1, $2, $3, $4, 'unidad', true, $5)
+                    ($1, $2, $3, $4, $5, 'unidad', true, $6)
                 RETURNING id
                 """,
                 negocio_id,
                 nombre.strip(),
                 variantes,
                 precio_venta,
+                precio_costo,
                 categoria_id,
             )
             producto_id = str(row["id"])
@@ -398,14 +400,11 @@ class OnboardingService:
         intro = "¡Genial! Vamos a cargar tu inventario 📦" if es_primero else "¡Perfecto! Siguiente producto 📦"
         return (
             f"{intro}\n\n"
-            "Escríbeme los datos así, en líneas separadas:\n\n"
-            "📝 *Nombre:* Polo básico\n"
-            "📐 *Talla:* M\n"
-            "💰 *Precio:* 35\n"
-            "📦 *Stock:* 10\n"
-            "🏷️ *Etiqueta:* verano24 _(opcional, escribe «no» si no quieres)_\n\n"
-            "Puedes copiar ese formato y reemplazar los valores. "
-            "Si algo te falta saber, también puedes escribir solo lo que tengas y te ayudo con lo demás 😊"
+            "📝 Nombre, Talla, Stock, Precio de venta, Precio de compra (opcional)\n\n"
+            "Ejemplo de mensaje:\n"
+            "_Polo manga corta, Talla XL, stock 50, precio de venta 50, precio de compra 30_\n\n"
+            "También puedes copiar el formato y reemplazar los valores 😊 "
+            "Si algo te falta saber, puedes escribir solo lo que tengas y te ayudo con lo demás."
         )
 
     # ──────────────────────────────────────────────
@@ -926,7 +925,7 @@ class OnboardingService:
         #  PASO 5c → Bucle de carga de productos
         # ══════════════════════════════════════════
         elif estado == "onboarding_5c":
-            sub_paso         = datos_temp.get("inv_sub_paso", SUB_PASO_NOMBRE)
+            sub_paso         = datos_temp.get("inv_sub_paso", SUB_PASO_COMPLETO)
             producto_actual  = datos_temp.get("inv_producto_actual", {})
             productos_count  = datos_temp.get("inv_productos_cargados", 0)
             msg_lower        = mensaje.strip().lower()
@@ -940,18 +939,18 @@ class OnboardingService:
                     producto_actual["nombre"] = campos["nombre"]
                 if campos.get("talla"):
                     producto_actual["talla"] = campos["talla"]
-                if campos.get("precio") is not None:
-                    producto_actual["precio_venta"] = campos["precio"]
+                if campos.get("precio_venta") is not None:
+                    producto_actual["precio_venta"] = campos["precio_venta"]
+                if campos.get("precio_compra") is not None:
+                    producto_actual["precio_compra"] = campos["precio_compra"]
                 if campos.get("cantidad") is not None:
                     producto_actual["cantidad"] = campos["cantidad"]
-                if "etiqueta" in campos:
-                    producto_actual["etiqueta"] = campos["etiqueta"]
 
                 datos_temp["inv_producto_actual"] = producto_actual
 
                 # ── Faltan campos obligatorios → pedir solo lo que falta ──
                 if not producto_actual.get("nombre"):
-                    datos_temp["inv_sub_paso"] = "nombre_faltante"
+                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                     return (
                         "Casi listo 😊 Solo me falta saber:\n\n"
@@ -959,7 +958,7 @@ class OnboardingService:
                         "_(Ej: Polo básico, Jean slim, Blusa floral)_"
                     )
                 if not producto_actual.get("talla"):
-                    datos_temp["inv_sub_paso"] = SUB_PASO_TALLA
+                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                     return (
                         f"Bien, *{producto_actual['nombre']}* anotado ✅\n\n"
@@ -967,7 +966,7 @@ class OnboardingService:
                         "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
                     )
                 if producto_actual.get("precio_venta") is None:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
+                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                     return (
                         f"*{producto_actual['nombre']}* talla *{producto_actual['talla']}* ✅\n\n"
@@ -975,7 +974,7 @@ class OnboardingService:
                         "_(Ej: 35, 49.90, 120)_"
                     )
                 if producto_actual.get("cantidad") is None:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
+                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
                     await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                     return (
                         f"*{producto_actual['nombre']}* · S/ {producto_actual['precio_venta']:.2f} ✅\n\n"
@@ -983,101 +982,7 @@ class OnboardingService:
                         "_(Ej: 10, 25 — escribe 0 si aún no tienes)_"
                     )
 
-                # ── Si etiqueta no vino → preguntar ──
-                if "etiqueta" not in campos:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"*{producto_actual['nombre']}* · talla {producto_actual['talla']} · "
-                        f"S/ {producto_actual['precio_venta']:.2f} · {producto_actual['cantidad']} uds ✅\n\n"
-                        "🏷️ ¿Le pones una *etiqueta* para reconocerlo fácil?\n"
-                        "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
-                    )
-
-                # ── Todos los campos listos → sugerir categoría y pedir confirmación ──
-                categorias = await self._leer_categorias_negocio(negocio_id)
-                sugerencia = await gemini_service.sugerir_categoria_producto(
-                    producto_actual["nombre"], categorias
-                )
-                datos_temp["inv_categoria_sugerida"] = sugerencia.get("categoria")
-                datos_temp["inv_sub_paso"] = SUB_PASO_CONFIRMAR
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return _armar_mensaje_confirmacion(producto_actual, sugerencia, categorias)
-
-            # ── Sub-paso: talla (fallback individual) ──
-            elif sub_paso == SUB_PASO_TALLA:
-                talla = mensaje.strip().upper()
-                if not talla:
-                    return "⚠️ La talla es obligatoria. ¿Cuál es la talla del producto?"
-                producto_actual["talla"] = talla
-                datos_temp["inv_producto_actual"] = producto_actual
-                if not producto_actual.get("precio_venta"):
-                    datos_temp["inv_sub_paso"] = SUB_PASO_PRECIO
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"Talla *{talla}* ✅\n\n"
-                        "💰 ¿Cuál es el *precio de venta* en Soles?\n"
-                        "_(Ej: 35, 49.90, 120)_"
-                    )
-                if producto_actual.get("cantidad") is None:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"Talla *{talla}* · S/ {producto_actual['precio_venta']:.2f} ✅\n\n"
-                        "📦 ¿Cuántas *unidades* tienes en stock?\n"
-                        "_(Ej: 10, 25 — escribe 0 si no tienes)_"
-                    )
-                datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return (
-                    "🏷️ ¿Le pones una *etiqueta*?\n"
-                    "_(Ej: verano24, outlet — o escribe *no*)_"
-                )
-
-            # ── Sub-paso: precio (fallback individual) ──
-            elif sub_paso == SUB_PASO_PRECIO:
-                precio = self._parsear_precio(mensaje)
-                if precio is None or precio <= 0:
-                    return "⚠️ No pude leer el precio. Escríbelo en números, ej: _49.90_"
-                producto_actual["precio_venta"] = precio
-                datos_temp["inv_producto_actual"] = producto_actual
-                if producto_actual.get("cantidad") is None:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_STOCK
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"Precio *S/ {precio:.2f}* ✅\n\n"
-                        "📦 ¿Cuántas *unidades* tienes en stock?\n"
-                        "_(Ej: 10, 25 — escribe 0 si no tienes)_"
-                    )
-                datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return (
-                    "🏷️ ¿Le pones una *etiqueta*?\n"
-                    "_(Ej: verano24, outlet — o escribe *no*)_"
-                )
-
-            # ── Sub-paso: stock (fallback individual) ──
-            elif sub_paso == SUB_PASO_STOCK:
-                cantidad = self._parsear_cantidad(mensaje)
-                if cantidad is None:
-                    return "⚠️ Escribe la cantidad en números, ej: _15_"
-                producto_actual["cantidad"] = cantidad
-                datos_temp["inv_producto_actual"] = producto_actual
-                datos_temp["inv_sub_paso"] = SUB_PASO_ETIQUETA
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return (
-                    f"Stock *{cantidad} uds* ✅\n\n"
-                    "🏷️ ¿Le pones una *etiqueta* para reconocerlo fácil?\n"
-                    "_(Ej: verano24, importado, outlet — o escribe *no* para omitir)_"
-                )
-
-            # ── Sub-paso: etiqueta ──
-            elif sub_paso == SUB_PASO_ETIQUETA:
-                etiqueta = None if self._es_omision(mensaje) else mensaje.strip()
-                producto_actual["etiqueta"] = etiqueta
-                datos_temp["inv_producto_actual"] = producto_actual
-
-                # ── Sugerir categoría y pedir confirmación ──
+                # Todo listo, confirmar
                 categorias = await self._leer_categorias_negocio(negocio_id)
                 sugerencia = await gemini_service.sugerir_categoria_producto(
                     producto_actual["nombre"], categorias
@@ -1089,8 +994,6 @@ class OnboardingService:
 
             # ── Sub-paso: confirmación del resumen + categoría ──
             elif sub_paso == SUB_PASO_CONFIRMAR:
-                confirmado = self._detectar_confirmacion(msg_lower)
-                quiere_corregir = any(p in msg_lower for p in ["no", "corregir", "cambiar", "error", "mal"])
                 quiere_nueva_cat = msg_lower.startswith("categoría ") or msg_lower.startswith("categoria ")
 
                 if quiere_nueva_cat:
@@ -1113,7 +1016,10 @@ class OnboardingService:
                         + _armar_mensaje_confirmacion(producto_actual, sugerencia, [])
                     )
 
-                elif quiere_corregir:
+                interpretacion = await gemini_service.interpretar_accion_inventario(mensaje)
+                accion = interpretacion.get("accion", "DESCONOCIDO")
+
+                if accion == "CORREGIR":
                     # Reiniciar producto actual y volver a pedir
                     datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
                     datos_temp["inv_producto_actual"] = {}
@@ -1122,9 +1028,8 @@ class OnboardingService:
                         "Sin problema, ingresa los datos nuevamente 😊\n\n"
                         + self._mensaje_plantilla_producto(productos_count + 1)
                     )
-
-                elif confirmado:
-                    etiqueta = producto_actual.get("etiqueta")
+                
+                elif accion in ["TERMINAR", "AGREGAR_OTRO"]:
                     categoria_nombre = datos_temp.get("inv_categoria_sugerida")
                     # Insertar con la categoría resuelta
                     try:
@@ -1134,7 +1039,7 @@ class OnboardingService:
                             talla=producto_actual["talla"],
                             precio_venta=producto_actual["precio_venta"],
                             cantidad=producto_actual["cantidad"],
-                            etiqueta=etiqueta,
+                            precio_costo=producto_actual.get("precio_compra"),
                             categoria_nombre=categoria_nombre,
                         )
                         productos_count += 1
@@ -1143,52 +1048,38 @@ class OnboardingService:
                         logger.error(f"[Onboarding] Error al guardar producto: {e}")
                         return "⚠️ Hubo un problema al guardar. Escribe el nombre del producto para intentar de nuevo."
 
-                    etiqueta_linea = f"🏷️ Etiqueta: {etiqueta}\n" if etiqueta else ""
-                    cat_linea = f"📂 Categoría: {categoria_nombre}\n" if categoria_nombre else ""
-                    progreso = "📦 Has cargado tu inventario inicial correctamente 🎉\n\n" if productos_count == 1 else f"Llevas *{productos_count}* producto(s) cargado(s) 🎉\n\n"
+                    if accion == "AGREGAR_OTRO":
+                        datos_temp["inv_producto_actual"] = {}
+                        datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
+                        await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                        return (
+                            f"✅ *{producto_actual['nombre']}* guardado.\n\n"
+                            + self._mensaje_plantilla_producto(productos_count + 1)
+                        )
+                    else: # TERMINAR
+                        await self.completar_onboarding(negocio_id)
+                        await self.upsert_sesion(negocio_id, "activo", {})
 
-                    datos_temp["inv_producto_actual"] = {}
-                    datos_temp["inv_sub_paso"] = SUB_PASO_CONTINUAR
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-
+                        nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
+                        nombre_prop    = datos_temp.get("nombre_propietario", "")
+                        return (
+                            f"✅ *{producto_actual['nombre']}* guardado.\n\n"
+                            f"¡Todo listo, {nombre_prop}! 🎉\n\n"
+                            f"*{nombre_negocio}* ya está configurado en Quri.\n\n"
+                            "Ahora puedes registrar tus operaciones fácilmente:\n"
+                            "📦 _'Vendí 3 polos a S/25 cada uno'_\n"
+                            "💸 _'Gasté S/200 en mercadería'_\n"
+                            "📊 _'¿Cuánto vendí hoy?'_\n\n"
+                            "¡Estoy aquí para ayudarte! 💪"
+                        )
+                
+                else: # DESCONOCIDO
                     return (
-                        f"✅ *{producto_actual['nombre']}* guardado\n\n"
-                        f"📐 Talla: {producto_actual['talla']}\n"
-                        f"💰 Precio: S/ {producto_actual['precio_venta']:.2f}\n"
-                        f"📦 Stock: {producto_actual['cantidad']} unidades\n"
-                        f"{etiqueta_linea}"
-                        f"{cat_linea}\n"
-                        f"{progreso}"
-                        "¿Qué hacemos?\n"
-                        "➕ Escribe *otro* para agregar más\n"
-                        "✅ Escribe *listo* para continuar"
-                    )
-                else:
-                    return (
-                        "Escribe *sí* para confirmar y guardar, "
-                        "*no* para corregir los datos, o "
-                        "*categoría NombreNueva* para crear una categoría nueva."
-                    )
-
-            # ── Sub-paso: continuar o terminar ──
-            elif sub_paso == SUB_PASO_CONTINUAR:
-                if any(p in msg_lower for p in ["otro", "más", "mas", "agregar", "sí", "si", "seguir", "continuar"]):
-                    datos_temp["inv_sub_paso"] = SUB_PASO_NOMBRE
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return self._mensaje_plantilla_producto(datos_temp.get("inv_productos_cargados", 0) + 1)
-
-                elif self._detectar_confirmacion(msg_lower):
-                    await self.upsert_sesion(negocio_id, "onboarding_6", datos_temp)
-                    return (
-                        f"¡Excelente! 🎉 Quedaron *{datos_temp.get('inv_productos_cargados', 0)}* "
-                        f"producto(s) en tu inventario.\n\n"
-                        "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
-                        "_(Ej: 8pm, 20:00, 9 de la noche)_"
-                    )
-                else:
-                    return (
-                        "Escribe *otro* para agregar más productos "
-                        "o *listo* para continuar con la configuración."
+                        "No entendí bien 😅\n"
+                        "✅ Escribe *queda* para guardar y terminar\n"
+                        "➕ Escribe *otro* para guardar y agregar uno más\n"
+                        "✏️ Escribe *corregir* para volver a escribir los datos\n"
+                        "O escribe *categoría NuevaCategoria* para crear una."
                     )
 
             # ── Sub-paso desconocido: reiniciar ──

@@ -612,33 +612,31 @@ No incluyas texto adicional ni markdown."""
         """
         Dado un mensaje en lenguaje libre, extrae los datos de un producto
         para carga de inventario durante el onboarding.
-        Retorna dict con claves: nombre, talla, precio, cantidad, etiqueta
+        Retorna dict con claves: nombre, talla, precio_venta, precio_compra, cantidad
         (los que no se mencionen llegan como None).
         """
         prompt = (
-            f'Un comerciante de ropa en Tacna escribiÃ³ esto para registrar un producto:\n'
+            f'Un comerciante de ropa en Tacna escribió esto para registrar un producto:\n'
             f'"{mensaje}"\n\n'
-            f'Extrae los datos y responde SOLO con JSON vÃ¡lido, sin texto adicional:\n'
+            f'Extrae los datos y responde SOLO con JSON válido, sin texto adicional:\n'
             f'{{\n'
-            f'  "nombre": "nombre del producto capitalizado, ej: Polo BÃ¡sico",\n'
-            f'  "talla": "talla en mayÃºsculas, ej: M, XL, 28, TALLA ÃšNICA",\n'
-            f'  "precio": nÃºmero decimal o null,\n'
-            f'  "cantidad": nÃºmero entero o null,\n'
-            f'  "etiqueta": "etiqueta corta o null si no se menciona o dice no"\n'
+            f'  "nombre": "nombre del producto capitalizado, ej: Polo Básico",\n'
+            f'  "talla": "talla en mayúsculas, ej: M, XL, 28, TALLA ÚNICA",\n'
+            f'  "cantidad": número entero o null,\n'
+            f'  "precio_venta": número decimal o null,\n'
+            f'  "precio_compra": número decimal o null\n'
             f'}}\n\n'
             f'Reglas:\n'
-            f'- nombre: capitaliza cada palabra. Si no se menciona â†’ null.\n'
-            f'- talla: siempre en MAYÃšSCULAS. Si no se menciona â†’ null.\n'
-            f'- precio: solo el nÃºmero, sin sÃ­mbolo de moneda. Si no se menciona â†’ null.\n'
-            f'- cantidad: solo el nÃºmero entero. Si no se menciona â†’ null.\n'
-            f'- etiqueta: si el usuario escribe "no", "ninguna", "sin etiqueta" â†’ null.\n'
-            f'- Si el mensaje mezcla precio y cantidad, el precio suele ser mayor.\n'
+            f'- nombre: capitaliza cada palabra. Si no se menciona → null.\n'
+            f'- talla: siempre en MAYÚSCULAS. Si no se menciona → null.\n'
+            f'- cantidad: solo el número entero. (stock) Si no se menciona → null.\n'
+            f'- precio_venta: solo el número. Si no se menciona → null.\n'
+            f'- precio_compra: solo el número (precio de costo). Si no se menciona → null.\n'
             f'Ejemplos:\n'
-            f'"polo azul M precio 35 stock 10" â†’ {{"nombre":"Polo Azul","talla":"M","precio":35.0,"cantidad":10,"etiqueta":null}}\n'
-            f'"blusa floral talla S a 49.90 tengo 5 etiqueta verano24" â†’ {{"nombre":"Blusa Floral","talla":"S","precio":49.90,"cantidad":5,"etiqueta":"verano24"}}\n'
-            f'"jean slim 28 25 soles 8 unidades" â†’ {{"nombre":"Jean Slim","talla":"28","precio":25.0,"cantidad":8,"etiqueta":null}}'
+            f'"Polo manga corta, Talla XL, stock 50, precio de venta 50, precio de compra 30" → {{"nombre":"Polo Manga Corta","talla":"XL","cantidad":50,"precio_venta":50.0,"precio_compra":30.0}}\n'
+            f'"Jean slim 28 25 soles 8 unidades" → {{"nombre":"Jean Slim","talla":"28","cantidad":8,"precio_venta":25.0,"precio_compra":null}}'
         )
-        fallback = {"nombre": None, "talla": None, "precio": None, "cantidad": None, "etiqueta": None}
+        fallback = {"nombre": None, "talla": None, "cantidad": None, "precio_venta": None, "precio_compra": None}
         try:
             response = await client.chat.completions.create(
                 model=MODELO_NLP,
@@ -843,6 +841,45 @@ REGLAS:
                 nums = re.findall(r"\d+", msg)
                 return {"accion": "QUITAR", "valor": int(nums[0]) if nums else None, "confianza": "baja"}
             return {"accion": "DESCONOCIDO", "valor": None, "confianza": "baja"}
+    async def interpretar_accion_inventario(self, mensaje: str) -> dict:
+        """
+        Mini-prompt para interpretar la respuesta del usuario tras confirmar un producto en onboarding.
+        Retorna la acción: 'TERMINAR', 'AGREGAR_OTRO', 'CORREGIR', 'DESCONOCIDO'
+        """
+        prompt = f"""El bot acaba de confirmar un producto cargado al inventario.
+El usuario responde: "{mensaje}"
+
+Clasifica su intención en UNA de estas acciones:
+TERMINAR → Señales: "queda", "listo", "está bien", "ok", "ya", "terminé".
+AGREGAR_OTRO → Señales: "otro", "quiero agregar otro", "más", "uno más", "sí", "agrega otro".
+CORREGIR → Señales: "mal", "error", "no", "corregir", "cambiar".
+DESCONOCIDO → No se puede determinar.
+
+Responde ÚNICAMENTE con JSON válido:
+{{"accion": "TERMINAR|AGREGAR_OTRO|CORREGIR|DESCONOCIDO"}}"""
+        try:
+            response = await client.chat.completions.create(
+                model=MODELO_NLP,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Eres un clasificador de intenciones. Responde SOLO con JSON válido.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=32,
+            )
+            raw = response.choices[0].message.content.strip()
+            resultado = self._parsear(raw)
+            return {"accion": resultado.get("accion", "DESCONOCIDO").upper()}
+        except Exception as e:
+            logger.error(f"[Groq] interpretar_accion_inventario error: {e}")
+            msg = mensaje.strip().lower()
+            if any(w in msg for w in ["queda", "listo", "bien", "ok", "ya"]): return {"accion": "TERMINAR"}
+            if any(w in msg for w in ["otro", "mas", "más", "agrega"]): return {"accion": "AGREGAR_OTRO"}
+            if any(w in msg for w in ["mal", "error", "no", "corregir", "cambiar"]): return {"accion": "CORREGIR"}
+            return {"accion": "DESCONOCIDO"}
 
 
 gemini_service = GeminiService()
