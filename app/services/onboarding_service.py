@@ -397,13 +397,14 @@ class OnboardingService:
         intro = "¡Genial! Vamos a cargar tu inventario 📦" if es_primero else "¡Perfecto! Siguiente producto 📦"
         return (
             f"{intro}\n\n"
-            "Para registrar tus productos, usa el siguiente formato: ✨\n\n"
+            "Para registrar tus productos, puedes usar el siguiente formato:\n\n"
             "📝 *Nombre:* Polo básico\n"
             "📐 *Talla:* M\n"
             "📦 *Stock:* 10\n"
             "💰 *Precio de Venta:* 35\n"
             "💵 *Precio de Compra:* 10 (opcional)\n\n"
-            "💡 _Puedes copiar el formato de arriba y solo cambiar los datos._\n\n"
+            "💡 _Puedes copiar el formato de arriba y solo cambiar los datos, o enviar en un solo texto o audio:_\n\n"
+            "_Polo manga corta, Talla XL, stock 50, precio de venta 50, precio de compra 30_\n\n"
             "Si no tienes toda la información ahora, no te preocupes, escribe lo que tengas y te ayudaré con el resto. 🚀"
         )
 
@@ -712,10 +713,13 @@ class OnboardingService:
             await self.upsert_sesion(negocio_id, "onboarding_4", datos_temp)
             return (
                 f"Perfecto, cierre a las *{horario}* 🕐 Anotado.\n\n"
-                "¿Y qué *tipo de ropa* vende tu negocio? 👗\n"
-                "_(Ej: ropa de dama, caballero, niños, ropa deportiva, etc.)_"
+                "¿Y qué *tipo de ropa* vende tu negocio? 👗\n\n"
+                "1. Ropa de Dama\n"
+                "2. Ropa de Varón\n"
+                "3. Ropa de Niños\n"
+                "4. Ropa Deportiva\n"
+                "5. ¡Otro! Cuéntame qué tipo de ropa es ✨"
             )
-
 
         # ══════════════════════════════════════════
         #  PASO 4 → Capturar tipo de ropa
