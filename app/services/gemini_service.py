@@ -665,22 +665,22 @@ No incluyas texto adicional ni markdown."""
             f'{{\n'
             f'  "nombre": "nombre del producto capitalizado, ej: Polo Básico",\n'
             f'  "talla": "talla en mayúsculas, ej: M, XL, 28, TALLA ÚNICA",\n'
-            f'  "cantidad": número entero o null,\n'
             f'  "precio_venta": número decimal o null,\n'
+            f'  "cantidad": número entero o null,\n'
             f'  "precio_compra": número decimal o null\n'
             f'}}\n\n'
             f'Reglas:\n'
             f'- nombre: capitaliza cada palabra. Si no se menciona → null.\n'
             f'- talla: siempre en MAYÚSCULAS. Si no se menciona → null.\n'
-            f'- cantidad: solo el número entero. (stock) Si no se menciona → null.\n'
             f'- precio_venta: solo el número. Si no se menciona → null.\n'
+            f'- cantidad: solo el número entero. (stock) Si no se menciona → null.\n'
             f'- precio_compra: solo el número (precio de costo). Si no se menciona → null.\n'
             f'Ejemplos:\n'
-            f'"Polo manga corta, Talla XL, stock 50, precio de venta 50, precio de compra 30" → {{"nombre":"Polo Manga Corta","talla":"XL","cantidad":50,"precio_venta":50.0,"precio_compra":30.0}}\n'
-            f'"Jean slim 28 25 soles 8 unidades" → {{"nombre":"Jean Slim","talla":"28","cantidad":8,"precio_venta":25.0,"precio_compra":null}}\n'
-            f'Si el mensaje es "L" y falta la talla → {{"nombre":null,"talla":"L","cantidad":null,"precio_venta":null,"precio_compra":null}}'
+            f'"Polo manga corta, Talla XL, stock 50, precio de venta 50, precio de compra 30" → {{"nombre":"Polo Manga Corta","talla":"XL","precio_venta":50.0,"cantidad":50,"precio_compra":30.0}}\n'
+            f'"Jean slim 28 25 soles 8 unidades" → {{"nombre":"Jean Slim","talla":"28","precio_venta":25.0,"cantidad":8,"precio_compra":null}}\n'
+            f'Si el mensaje es "L" y falta la talla → {{"nombre":null,"talla":"L","precio_venta":null,"cantidad":null,"precio_compra":null}}'
         )
-        fallback = {"nombre": None, "talla": None, "cantidad": None, "precio_venta": None, "precio_compra": None}
+        fallback = {"nombre": None, "talla": None, "precio_venta": None, "cantidad": None, "precio_compra": None}
         try:
             response = await client.chat.completions.create(
                 model=MODELO_NLP,
@@ -689,7 +689,7 @@ No incluyas texto adicional ni markdown."""
                         "role": "system",
                         "content": (
                             "Eres un extractor de datos de productos de ropa. "
-                            "Responde SOLO con JSON vÃ¡lido, sin texto adicional ni markdown."
+                            "Responde SOLO con JSON válido, sin texto adicional ni markdown."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -702,17 +702,19 @@ No incluyas texto adicional ni markdown."""
             resultado = json.loads(raw)
 
             # Normalizar tipos por seguridad
-            if resultado.get("precio") is not None:
-                resultado["precio"] = float(resultado["precio"])
+            if resultado.get("precio_venta") is not None:
+                try: resultado["precio_venta"] = float(resultado["precio_venta"])
+                except: resultado["precio_venta"] = None
+            if resultado.get("precio_compra") is not None:
+                try: resultado["precio_compra"] = float(resultado["precio_compra"])
+                except: resultado["precio_compra"] = None
             if resultado.get("cantidad") is not None:
-                resultado["cantidad"] = int(resultado["cantidad"])
+                try: resultado["cantidad"] = int(resultado["cantidad"])
+                except: resultado["cantidad"] = None
             if isinstance(resultado.get("talla"), str):
                 resultado["talla"] = resultado["talla"].upper()
             if isinstance(resultado.get("nombre"), str):
                 resultado["nombre"] = resultado["nombre"].strip().title()
-            if isinstance(resultado.get("etiqueta"), str):
-                if self._es_omision_etiqueta(resultado["etiqueta"]):
-                    resultado["etiqueta"] = None
 
             logger.info(f"[Groq] extraer_producto_inventario â†’ {resultado}")
             return resultado
