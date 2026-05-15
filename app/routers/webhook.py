@@ -553,8 +553,14 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 await ycloud.send_text(from_number, resultado_stock["mensaje"])
 
             elif estado_stock == "error_stock":
-                respuesta_venta = _generar_msg_venta(nombre_producto)
+                prod_nombre = resultado_stock.get("producto_nombre", nombre_producto)
+                prod_talla = resultado_stock.get("producto_talla")
+                if prod_talla:
+                    prod_nombre += f" Talla {prod_talla}"
+                    
+                respuesta_venta = _generar_msg_venta(prod_nombre)
                 await ycloud.send_text(from_number, respuesta_venta)
+                await ycloud.send_text(from_number, resultado_stock["mensaje"])
                 logger.error(f"[Stock] Error en descuento: {resultado_stock['mensaje']}")
 
             if es_audio:

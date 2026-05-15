@@ -312,12 +312,22 @@ class StockService:
 
             except Exception as e:
                 logger.error(f"[Stock] Error descontando: {e}")
-                # Stock insuficiente u otro error de BD
+                prod = await self.get_producto(producto_id)
+                p_nombre = prod["nombre"] if prod else nombre_producto
+                p_talla = prod.get("talla") if prod else None
+                
+                if "insuficiente" in str(e).lower() or "check constraint" in str(e).lower():
+                    msg_error = f"⚠️ No pude descontar el stock: no hay unidades suficientes registradas."
+                else:
+                    msg_error = f"⚠️ Hubo un problema al descontar el stock."
+
                 return {
                     "estado": "error_stock",
-                    "mensaje": f"⚠️ No pude descontar el stock: {e}",
+                    "mensaje": msg_error,
                     "alerta_stock": False,
                     "producto_id": producto_id,
+                    "producto_nombre": p_nombre,
+                    "producto_talla": p_talla,
                     "candidatos": None,
                 }
 
