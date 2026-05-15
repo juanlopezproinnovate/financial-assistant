@@ -411,8 +411,9 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
             respuesta = (
                 f'✅ Venta registrada, {nombre_propio}\n\n'
                 f"📅 {f_fecha} {f_hora}\n"
-                f"📝 {cantidad}x {nombre_producto}\n"
-                f"💰 {simbolo} {datos.get('total', 0):.2f}"
+                f"📝 Producto: {nombre_producto}\n"
+                f"📦 Cantidad: {cantidad}\n"
+                f"💰 Total: {simbolo} {datos.get('total', 0):.2f}"
             )
             await ycloud.send_text(from_number, respuesta)
 

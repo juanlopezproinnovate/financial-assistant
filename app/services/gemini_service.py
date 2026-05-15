@@ -92,6 +92,10 @@ datos: {
   "hora": "HH:MM:SS"           â€” solo si el usuario especificÃ³ hora
 }
 Si falta precio o cantidad, pÃ­delos en "respuesta". No inventes valores.
+IMPORTANTE SOBRE PRECIOS:
+Si el usuario dice "vendÃ­ 2 polos a 70 soles" y NO especifica "cada uno" o "c/u", ASUME que 70 es el TOTAL. Entonces: total:70, precio_unitario:35.
+Si dice "vendÃ­ 2 polos a 35 cada uno", entonces: precio_unitario:35, total:70.
+
 IMPORTANTE: extrae el nombre del producto tan especÃ­fico como el usuario lo diga.
 "vendÃ­ un polo azul talla M" â†’ producto: "polo azul talla M"
 "vendÃ­ 3 polos" â†’ producto: "polo" (sin mÃ¡s info disponible)
@@ -137,8 +141,8 @@ Pesos, CLP â†’ "CLP"
 Sin moneda â†’ asumir "PEN"
 
 EJEMPLOS:
-"vendÃ­ 3 polos azul talla M a 25 soles" â†’ VENTA, producto:"polo azul talla M", cantidad:3, precio_unitario:25, total:75, moneda:PEN
-"vendÃ­ 3 polos a 25 soles" â†’ VENTA, producto:"polo", cantidad:3, precio_unitario:25, total:75, moneda:PEN
+"vendÃ­ 2 polos a 70 soles" â†’ VENTA, producto:"polo", cantidad:2, precio_unitario:35, total:70, moneda:PEN
+"vendÃ­ 3 polos a 25 soles cada uno" â†’ VENTA, producto:"polo", cantidad:3, precio_unitario:25, total:75, moneda:PEN
 "gastÃ© 200 en pasajes a Bolivia" â†’ GASTO, concepto:pasajes Bolivia, monto:200, moneda:PEN, categoria:transporte
 "llegaron 50 blusas rojas talla S a S/15" â†’ INVENTARIO, tipo:entrada, producto:"blusa roja talla S", cantidad:50, precio_costo:15, moneda:PEN
 "tengo 20 pantalones" â†’ INVENTARIO, tipo:ajuste, producto:"pantalÃ³n", cantidad:20
@@ -364,7 +368,7 @@ class GeminiService:
             f'Genera un mensaje corto de WhatsApp (mÃ¡ximo 2 lÃ­neas) para preguntarle '
             f'al comerciante si quiere agregar "{nombre}"{precio_txt} a su catÃ¡logo, '
             f"dado que acaba de vender {cantidad} unidad(es) y no estaba registrado. "
-            f"Habla en espaÃ±ol peruano cÃ¡lido. Termina con (sÃ­/no). Sin markdown."
+            f"Habla en espaÃ±ol peruano cÃ¡lido. Termina siempre la frase con: Â¿te interesa agregarlo (sÃ­/no)? Sin markdown."
         )
         try:
             response = await client.chat.completions.create(
@@ -378,7 +382,7 @@ class GeminiService:
             precio_str = f" a S/{precio:.2f}" if precio else ""
             return (
                 f'No tengo "{nombre}" en tu catÃ¡logo. '
-                f"Â¿Lo agrego{precio_str}? (sÃ­/no)"
+                f"Â¿Lo agrego{precio_str} (sÃ­/no)?"
             )
 
     # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
