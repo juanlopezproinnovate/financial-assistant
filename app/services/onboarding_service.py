@@ -978,6 +978,16 @@ class OnboardingService:
                     producto_actual["precio_compra"] = campos["precio_compra"]
                 if campos.get("cantidad") is not None:
                     producto_actual["cantidad"] = campos["cantidad"]
+                if campos.get("precio_compra") is not None:
+                    producto_actual["precio_compra"] = campos["precio_compra"]
+
+                # ── Catch explicit omission of precio_compra ──
+                if "precio_compra" not in producto_actual and producto_actual.get("cantidad") is not None:
+                    if campos.get("precio_compra") is None:
+                        if self._es_omision(mensaje):
+                            producto_actual["precio_compra"] = None
+                        elif mensaje.strip() == "0":
+                            producto_actual["precio_compra"] = 0.0
 
                 datos_temp["inv_producto_actual"] = producto_actual
 
@@ -1013,6 +1023,14 @@ class OnboardingService:
                         f"*{producto_actual['nombre']}* · S/ {producto_actual['precio_venta']:.2f} ✅\n\n"
                         "📦 ¿Cuántas *unidades* tienes en stock ahora?\n"
                         "_(Ej: 10, 25 — escribe 0 si aún no tienes)_"
+                    )
+                if "precio_compra" not in producto_actual:
+                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
+                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+                    return (
+                        f"*{producto_actual['nombre']}* · {producto_actual['cantidad']} unidades en stock ✅\n\n"
+                        "💵 ¿Cuál es el *precio de compra* (costo) en Soles?\n"
+                        "_(Opcional — escribe '0' o 'no' si prefieres no ponerlo)_"
                     )
 
                 # Todo listo, confirmar
