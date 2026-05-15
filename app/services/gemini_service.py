@@ -850,9 +850,9 @@ REGLAS:
 El usuario responde: "{mensaje}"
 
 Clasifica su intención en UNA de estas acciones:
-TERMINAR → Señales: "queda", "listo", "está bien", "ok", "ya", "terminé".
-AGREGAR_OTRO → Señales: "otro", "quiero agregar otro", "más", "uno más", "sí", "agrega otro".
-CORREGIR → Señales: "mal", "error", "no", "corregir", "cambiar".
+TERMINAR → Señales: "todo bien", "sí", "queda", "listo", "está bien", "ok", "ya", "terminé".
+AGREGAR_OTRO → Señales: "otro", "quiero agregar otro", "más", "uno más", "agrega otro", "sí, otro".
+CORREGIR → Señales: "editar", "mal", "error", "no", "corregir", "cambiar".
 DESCONOCIDO → No se puede determinar.
 
 Responde ÚNICAMENTE con JSON válido:

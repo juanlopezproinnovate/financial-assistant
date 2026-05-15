@@ -77,7 +77,6 @@ def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: li
         )
 
     return (
-        f"¿Confirmas estos datos?\n\n"
         f"📝 Producto: *{producto['nombre']}*\n"
         f"📐 Talla: {producto['talla']}\n"
         f"📦 Stock: {producto['cantidad']} unidades\n"
@@ -85,9 +84,7 @@ def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: li
         f"{compra_linea}"
         f"{cat_linea}"
         f"{cat_instruccion}\n"
-        f"✅ Escribe *queda* o *listo* para guardar y terminar\n"
-        f"➕ Escribe *otro* para guardar y agregar uno más\n"
-        f"✏️ Escribe *corregir* si hay un error en los datos"
+        f"¿Todo bien o quieres agregar otro / editar algo? 😊"
     )
 
 
@@ -1075,11 +1072,7 @@ class OnboardingService:
                 
                 else: # DESCONOCIDO
                     return (
-                        "No entendí bien 😅\n"
-                        "✅ Escribe *queda* para guardar y terminar\n"
-                        "➕ Escribe *otro* para guardar y agregar uno más\n"
-                        "✏️ Escribe *corregir* para volver a escribir los datos\n"
-                        "O escribe *categoría NuevaCategoria* para crear una."
+                        "No entendí bien 😅 ¿Todo está correcto? Puedes decirme 'sí', 'quiero agregar otro', o 'corregir algo'."
                     )
 
             # ── Sub-paso desconocido: reiniciar ──
