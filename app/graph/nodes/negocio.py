@@ -794,6 +794,8 @@ async def sub_estado_activo_node(state: QuriState) -> QuriState:
     """
     sub_estado       = state.get("sub_estado", "")
     datos_pendientes = state.get("datos_pendientes", {})
+    logger.info(f"[SubEstado] sub_estado={sub_estado}")
+    logger.info(f"[SubEstado] datos_pendientes={datos_pendientes}")
     mensaje          = state["mensaje"]
     negocio_id       = state["negocio_id"]
     msg_lower        = mensaje.strip().lower()
@@ -1054,6 +1056,10 @@ async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
     extractor LLM que usa el onboarding, y persiste el sub_estado en
     cada turno vía datos_pendientes (que graph.py guarda en la BD).
     """
+
+    logger.info(f"[AgregarProducto] datos recibidos: {datos}")
+    logger.info(f"[AgregarProducto] formulario: {datos.get('formulario_producto')}")
+    
     formulario = datos.get("formulario_producto", {})
     msg_lower  = mensaje.strip().lower()
 
