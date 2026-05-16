@@ -25,9 +25,6 @@ client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 
 MODELO_NLP = "llama-3.3-70b-versatile"
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-#  SYSTEM PROMPT
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 SYSTEM_PROMPT = """
 Eres Quri, el asistente de negocios por WhatsApp para comerciantes de ropa de Tacna, PerÃº.
 Tu misiÃ³n es ayudar a registrar ventas, gastos e inventario usando lenguaje natural.
@@ -1182,4 +1179,4 @@ Reglas para EDITAR:
 
 
 gemini_service = GeminiService()
-
+
