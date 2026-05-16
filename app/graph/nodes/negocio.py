@@ -1066,6 +1066,14 @@ async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
             "datos_pendientes": {},
         }
 
+    if datos.get("inv_guardado"):
+        return {
+            **state,
+            "respuesta": "¿En qué más te ayudo? 😊",
+            "sub_estado": "",
+            "datos_pendientes": {},
+        }
+
     # ── Extraer lo que venga en el mensaje con el LLM ──
     campos = await gemini_service.extraer_producto_inventario(mensaje, formulario)
 
@@ -1161,6 +1169,23 @@ async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
     if precio_compra_final == "pendiente":
         precio_compra_final = None  # no respondió, omitimos
 
+    ya_existe = await _producto_ya_existe(
+        negocio_id,
+        formulario["nombre"],
+        formulario.get("talla"),
+    )
+    if ya_existe:
+        talla_txt = f" Talla {formulario['talla']}" if formulario.get("talla") else ""
+        return {
+            **state,
+            "respuesta": (
+                f"⚠️ *{formulario['nombre']}{talla_txt}* ya está en tu catálogo.\n\n"
+                f"¿Quieres registrar otro producto diferente o en qué más te ayudo? 😊"
+            ),
+            "sub_estado": "",
+            "datos_pendientes": {},
+        }
+
     try:
         await stock_service.crear_producto(
             negocio_id       = negocio_id,
@@ -1198,6 +1223,25 @@ async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
         "sub_estado": "",
         "datos_pendientes": {},
     }
+
+async def _producto_ya_existe(negocio_id: str, nombre: str, talla: str) -> bool:
+    """Verifica si ya existe un producto con el mismo nombre y talla."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id FROM productos
+            WHERE negocio_id = $1
+              AND LOWER(nombre) = LOWER($2)
+              AND LOWER(COALESCE(talla, '')) = LOWER(COALESCE($3, ''))
+              AND activo = true
+            LIMIT 1
+            """,
+            negocio_id,
+            nombre.strip(),
+            talla or "",
+        )
+    return row is not None
 
 async def _handle_datos_producto_nuevo(state, datos, negocio_id, mensaje):
     formulario  = datos.get("formulario_producto", {})

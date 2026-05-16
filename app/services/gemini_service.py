@@ -660,7 +660,21 @@ No incluyas texto adicional ni markdown."""
             f'Un comerciante de ropa en Tacna escribió esto para registrar un producto:\n'
             f'"{mensaje}"\n\n'
             f'Extrae los datos y responde SOLO con JSON válido:\n'
-            f'{{"nombre": str o null, "talla": str o null, "precio_venta": float o null, "cantidad": int o null, "precio_compra": float o null}}'
+            f'{{"nombre": str o null, "talla": str o null, "precio_venta": float o null, "cantidad": int o null, "precio_compra": float o null}}\n\n'
+            f'REGLAS DE EXTRACCIÓN:\n'
+            f'- "precio_venta" → precio al que se VENDE al cliente.\n'
+            f'  Señales: "precio", "cuesta", "vale", "lo vendo a", "precio de venta", "vendo a", "sale a"\n'
+            f'- "precio_compra" → precio al que se COMPRÓ la mercadería.\n'
+            f'  Señales: "me costó", "costo", "compré a", "precio de compra", "lo compré a", "me salió"\n'
+            f'- Si el mensaje menciona UN SOLO precio sin especificar tipo → siempre asignarlo a "precio_venta"\n'
+            f'- Si ya se sabe el precio_venta por contexto y aparece otro precio → asignarlo a "precio_compra"\n'
+            f'- "cantidad" → stock disponible.\n'
+            f'  Señales: "tengo", "stock", "unidades", "en stock tengo", "me quedan", "hay"\n'
+            f'EJEMPLOS:\n'
+            f'- "jean básico XL que cuesta 23 soles" → precio_venta=23, precio_compra=null\n'
+            f'- "polo talla M, precio 35, me costó 15" → precio_venta=35, precio_compra=15\n'
+            f'- "blusa S, vale 50, lo compré a 20, tengo 10" → precio_venta=50, precio_compra=20, cantidad=10\n'
+            f'- "short talla M, precio 55 soles, stock 29" → precio_venta=55, precio_compra=null, cantidad=29\n'
         )
         fallback = {"nombre": None, "talla": None, "precio_venta": None, "cantidad": None, "precio_compra": None}
         try:
