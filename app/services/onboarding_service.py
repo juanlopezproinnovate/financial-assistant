@@ -65,7 +65,7 @@ def _armar_mensaje_confirmacion(producto: dict, sugerencia: dict, categorias: li
     compra_linea = f"🏷️ Precio compra: S/ {producto['precio_compra']:.2f}\n" if producto.get("precio_compra") else ""
 
     if sugerencia.get("match"):
-        cat_linea = f"📂 Categoría: *{sugerencia['categoria']}* ✅\n"
+        cat_linea = f"📂 Categoría: *{sugerencia['categoria']}* ✅\n\n"
         cat_instruccion = ""
         pregunta_final = "¿Quieres editar el producto, agregar otro producto o terminar el inventario? 😊"
     else:
