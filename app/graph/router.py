@@ -24,7 +24,7 @@ from app.services.gemini_service import gemini_service
 logger = logging.getLogger(__name__)
 
 # Intents que pueden interrumpir cualquier sub_estado activo
-INTENTS_INTERRUPTORES = {"REPORTE", "SALUDO", "AYUDA"}
+INTENTS_INTERRUPTORES = {"REPORTE", "SALUDO", "AYUDA", "CATALOGO"}
 
 # Sub-estados que NO se pueden interrumpir (necesitan respuesta del usuario)
 SUB_ESTADOS_BLOQUEANTES = {
@@ -168,7 +168,7 @@ def _intent_a_nodo(intent: str) -> str:
         "SALUDO":                "respuesta_directa",
         "AYUDA":                 "respuesta_directa",
         "DESCONOCIDO":           "respuesta_directa",
-        "CATALOGO": "catalogo"
+        "CATALOGO":              "catalogo"
     }
     return mapa.get(intent, "respuesta_directa")
 

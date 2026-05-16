@@ -160,9 +160,22 @@ OTROS INTENTS (usan "datos", "items" queda [])
 
 CATALOGO — frases: qué productos tengo, cuáles son mis productos,
            muéstrame mi catálogo, cuántos productos tengo,
-           lista de productos, mis productos, qué tengo registrado
+           lista de productos, mis productos, qué tengo registrado,
+           que tengo en inventario, qué productos tengo en mi inventario,
+           muéstrame mi inventario, qué hay en mi inventario,
+           cuántos productos tengo en inventario, ver inventario
 
 datos: {"filtro": str o null}  ← null si no filtra, "blusas" si dice "mis blusas"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REGLA DE DISTINCIÓN INVENTARIO vs CATALOGO:
+- INVENTARIO → el usuario quiere AGREGAR o ACTUALIZAR stock
+  Señales: "llegaron", "entró", "agregué", "añadir producto", 
+           "registrar producto", "nuevo producto", "quiero agregar"
+- CATALOGO → el usuario quiere VER o CONSULTAR lo que tiene
+  Señales: "qué tengo", "muéstrame", "ver", "cuántos tengo",
+           "listar", "mis productos", "inventario" cuando es consulta
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 INCOMPLETO — mensaje ambiguo sin info crítica
 datos: {
