@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 
-MODELO_NLP = "llama-3.3-70b-versatile"
+MODELO_NLP = "llama-3.1-70b-versatile"
 
 SYSTEM_PROMPT = """
 Eres Quri, el asistente de negocios por WhatsApp para comerciantes de ropa de Tacna, Perú.
@@ -157,6 +157,12 @@ EJEMPLOS INVENTARIO:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OTROS INTENTS (usan "datos", "items" queda [])
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CATALOGO — frases: qué productos tengo, cuáles son mis productos,
+           muéstrame mi catálogo, cuántos productos tengo,
+           lista de productos, mis productos, qué tengo registrado
+
+datos: {"filtro": str o null}  ← null si no filtra, "blusas" si dice "mis blusas"
 
 INCOMPLETO — mensaje ambiguo sin info crítica
 datos: {
