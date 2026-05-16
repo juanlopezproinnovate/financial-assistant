@@ -46,3 +46,4 @@ class QuriState(TypedDict, total=False):
     # ── Control de flujo ────────────────────────────────────
     siguiente_nodo: str              # usado por el router para decidir
     finalizado: bool                 # True cuando hay respuesta lista
+    items: list[dict]
