@@ -22,12 +22,12 @@ from app.graph.nodes.negocio import (
     inventario_node,
     reporte_node,
     eliminar_node,
+    catalogo_node,
     editar_node,
     respuesta_directa_node,
     sub_estado_activo_node,
 )
 from app.services.onboarding_service import onboarding_service
-from app.graph.nodes.catalogo_node import catalogo_node
 
 logger = logging.getLogger(__name__)
 
