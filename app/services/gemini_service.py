@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 
-MODELO_NLP = "llama-3.1-70b-versatile"
+MODELO_NLP = "deepseek-r1-distill-llama-70b"
 
 SYSTEM_PROMPT = """
 Eres Quri, el asistente de negocios por WhatsApp para comerciantes de ropa de Tacna, Perú.
