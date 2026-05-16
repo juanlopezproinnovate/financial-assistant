@@ -454,7 +454,7 @@ class StockService:
                 producto = await self.get_producto(producto_id)
                 return {
                     "estado": "actualizado",
-                    "mensaje": f"✅ Entrada registrada. {producto['nombre']} ahora tiene {cantidad_nueva} unidades.",
+                    "mensaje": f"✅ Muy bien, se aumentaron {cantidad} unidades. En total hay {cantidad_nueva} unidades de {producto['nombre']}.",
                     "producto_id": producto_id,
                 }
 
@@ -575,20 +575,23 @@ class StockService:
                 "producto_talla": producto.get("talla"),
             }
 
-        elif operacion == "inventario_entrada":
+        elif operacion.startswith("inventario_"):
+            # Determinar motivo
+            motivo = "reposicion" if "entrada" in operacion else "ajuste"
             resultado = await self.reponer_stock_bd(
                 producto_id=producto_id,
                 negocio_id=negocio_id,
                 cantidad=cantidad,
-                motivo="reposicion",
+                motivo=motivo,
             )
             producto = await self.get_producto(producto_id)
+            cantidad_final = resultado.get('cantidad_despues', '?')
             return {
                 "estado": "actualizado",
-                "mensaje": f"✅ {producto['nombre']} ahora tiene {resultado.get('cantidad_despues', '?')} unidades.",
+                "mensaje": f"✅ Muy bien, se aumentaron {cantidad} unidades. En total hay {cantidad_final} unidades de {producto['nombre']}.",
             }
 
-        return {"estado": "ok", "mensaje": "✅ Operación completada."}
+        return {"estado": "ok", "mensaje": f"✅ Operación completada. ({operacion})"}
 
 
 stock_service = StockService()
