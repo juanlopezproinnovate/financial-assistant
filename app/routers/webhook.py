@@ -776,6 +776,57 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
                 )
                 respuesta = resultado_inv["mensaje"]
 
+            elif estado_inv == "sin_match":
+                if precio_venta is not None:
+                    separado = await gemini_service.extraer_nombre_y_talla(nombre_producto)
+                    nombre_limpio = separado.get("nombre") or nombre_producto.strip().title()
+                    talla_extraida = separado.get("talla")
+                    
+                    formulario = {
+                        "nombre":        nombre_limpio,
+                        "talla":         talla_extraida,
+                        "stock":         cantidad,
+                        "precio_venta":  precio_venta,
+                        "precio_compra": precio_costo,
+                    }
+                    datos_temp = {
+                        "operacion_stock": f"inventario_{tipo_inv}",
+                        "cantidad_stock": cantidad,
+                        "nombre_producto_original": nombre_producto,
+                        "formulario_producto": formulario
+                    }
+                    talla_linea = f"📐 *Talla:* {talla_extraida}\n" if talla_extraida else "📐 *Talla:* (no especificada)\n"
+                    pv = formulario.get("precio_venta")
+                    pc = formulario.get("precio_compra")
+                    st = formulario.get("stock")
+                    msg_form = (
+                        f"📝 *Nombre:* {formulario.get('nombre', '?')}\n"
+                        f"{talla_linea}"
+                        f"📦 *Stock:* {st if st is not None else '(no especificado)'}\n"
+                        f"💰 *Precio de Venta:* {f'S/ {pv:.2f}' if pv else '(no especificado)'}\n"
+                        f"💵 *Precio de Compra:* {f'S/ {pc:.2f}' if pc else '(opcional)'}\n\n"
+                        f"¿Queda así? Escribe *guardar*, sigue editando, o *cancelar*."
+                    )
+                    await onboarding_service.upsert_sesion(
+                        negocio_id_str, "ESPERANDO_DATOS_PRODUCTO_NUEVO", datos_temp
+                    )
+                    respuesta = msg_form
+                else:
+                    msg_decision = (
+                        f"Este producto no está en tu catálogo 🔍\n\n"
+                        f"¿Quieres que agregue *{nombre_producto}* como un nuevo producto en tu catálogo?\n"
+                        f"Responde *Sí* para agregarlo, o *Cancelar*."
+                    )
+                    await onboarding_service.upsert_sesion(
+                        negocio_id_str, "ESPERANDO_DECISION_PRODUCTO_NUEVO", 
+                        {
+                            "operacion_stock": f"inventario_{tipo_inv}",
+                            "cantidad_stock": cantidad,
+                            "nombre_producto_original": nombre_producto,
+                        }
+                    )
+                    respuesta = msg_decision
+
         # ── Intent REPORTE ──
         elif intent == "REPORTE":
             datos_reporte = await _obtener_reporte(negocio_id_str, datos.get("periodo", "hoy"))

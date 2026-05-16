@@ -512,21 +512,9 @@ class StockService:
             }
 
         else:
-            # Producto nuevo: crear con stock inicial
-            producto_id = await self.crear_producto(
-                negocio_id=negocio_id,
-                nombre=nombre_producto,
-                precio_venta=precio_venta,
-                precio_costo=precio_costo,
-                cantidad_inicial=cantidad,
-            )
             return {
-                "estado": "creado",
-                "mensaje": (
-                    f'✅ Agregué "{nombre_producto.title()}" a tu catálogo '
-                    f"con {cantidad} unidades en stock 📦"
-                ),
-                "producto_id": producto_id,
+                "estado": "sin_match",
+                "mensaje": "No se encontró el producto en el catálogo.",
             }
 
     async def confirmar_seleccion_parcial(
