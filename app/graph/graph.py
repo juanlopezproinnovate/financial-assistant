@@ -27,6 +27,7 @@ from app.graph.nodes.negocio import (
     sub_estado_activo_node,
 )
 from app.services.onboarding_service import onboarding_service
+from app.graph.nodes.catalogo_node import catalogo_node
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ def _build_graph() -> StateGraph:
     g.add_node("sub_estado_activo",sub_estado_activo_node)
     # Nodo onboarding: usa el servicio existente sin modificarlo
     g.add_node("onboarding",       onboarding_node)
+    g.add_node("catalogo", catalogo_node)
 
     # Entry point
     g.set_entry_point("router")
@@ -77,6 +79,7 @@ def _build_graph() -> StateGraph:
             "respuesta_directa": "respuesta_directa",
             "sub_estado_activo": "sub_estado_activo",
             "onboarding":        "onboarding",
+            "catalogo":          "catalogo"
         },
     )
 
@@ -84,7 +87,7 @@ def _build_graph() -> StateGraph:
     for nodo in [
         "venta", "gasto", "inventario", "reporte",
         "eliminar", "editar", "respuesta_directa",
-        "sub_estado_activo", "onboarding",
+        "sub_estado_activo", "onboarding", "catalogo",
     ]:
         g.add_edge(nodo, END)
 

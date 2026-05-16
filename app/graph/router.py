@@ -167,6 +167,7 @@ def _intent_a_nodo(intent: str) -> str:
         "SALUDO":                "respuesta_directa",
         "AYUDA":                 "respuesta_directa",
         "DESCONOCIDO":           "respuesta_directa",
+        "CATALOGO": "catalogo"
     }
     return mapa.get(intent, "respuesta_directa")
 

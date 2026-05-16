@@ -328,3 +328,136 @@ async def gasto_node(state: QuriState) -> QuriState:
 
     respuesta = "\n".join(lineas) + aviso_limite
     return {**state, "respuesta": respuesta, "sub_estado": "", "datos_pendientes": {}}
+
+async def catalogo_node(state: QuriState) -> QuriState:
+    """
+    Consulta los productos registrados del negocio en Supabase.
+ 
+    Comportamiento:
+    - Si tiene 10 o menos → muestra todos con stock y precio
+    - Si tiene más de 10  → muestra los 10 más recientes + avisa el total
+    - Si el usuario filtró (ej: "mis blusas") → filtra por nombre/talla/categoría
+    - Stock ≤ 5 unidades → emoji de advertencia ⚠️
+    """
+    negocio_id = state["negocio_id"]
+    datos      = state.get("datos_nlp", {}) or {}
+    filtro     = datos.get("filtro")  # str o None
+ 
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+ 
+        # ── Total de productos activos ──────────────────────
+        total_row = await conn.fetchrow(
+            "SELECT COUNT(*) AS total FROM productos WHERE negocio_id = $1 AND activo = true",
+            negocio_id,
+        )
+        total = int(total_row["total"])
+ 
+        if total == 0:
+            return {
+                **state,
+                "respuesta": (
+                    "Aún no tienes productos registrados en tu catálogo 📦\n\n"
+                    "Puedes agregar uno diciéndome, por ejemplo:\n"
+                    "_'Llegaron 20 polos talla M a S/15'_"
+                ),
+                "sub_estado": "",
+                "datos_pendientes": {},
+            }
+ 
+        # ── Query con o sin filtro ──────────────────────────
+        base_select = """
+            SELECT
+                p.nombre,
+                p.talla,
+                p.precio_venta_pen,
+                p.precio_costo,
+                COALESCE(s.cantidad_actual, 0) AS stock,
+                c.nombre AS categoria,
+                p.created_at
+            FROM productos p
+            LEFT JOIN stock s      ON s.producto_id = p.id
+            LEFT JOIN categorias c ON c.id = p.categoria_id
+            WHERE p.negocio_id = $1 AND p.activo = true
+        """
+ 
+        if filtro:
+            rows = await conn.fetch(
+                base_select + """
+                  AND (
+                    LOWER(p.nombre)  ILIKE $2 OR
+                    LOWER(p.talla)   ILIKE $2 OR
+                    LOWER(c.nombre)  ILIKE $2
+                  )
+                ORDER BY p.created_at DESC
+                LIMIT 10
+                """,
+                negocio_id,
+                f"%{filtro.lower()}%",
+            )
+        else:
+            rows = await conn.fetch(
+                base_select + "ORDER BY p.created_at DESC LIMIT 10",
+                negocio_id,
+            )
+ 
+    productos = [dict(r) for r in rows]
+    mostrados = len(productos)
+ 
+    # ── Sin resultados para el filtro ───────────────────────
+    if filtro and not productos:
+        return {
+            **state,
+            "respuesta": (
+                f"No encontré productos con \"{filtro}\" en tu catálogo 🔍\n"
+                "Prueba con otro nombre o categoría."
+            ),
+            "sub_estado": "",
+            "datos_pendientes": {},
+        }
+ 
+    # ── Encabezado ──────────────────────────────────────────
+    if filtro:
+        encabezado = f"📦 Productos con \"{filtro}\" ({mostrados} encontrado{'s' if mostrados != 1 else ''}):\n\n"
+    elif total <= 10:
+        encabezado = f"📦 Tu catálogo completo ({total} producto{'s' if total != 1 else ''}):\n\n"
+    else:
+        encabezado = (
+            f"📦 Tienes *{total} productos* registrados en total.\n"
+            f"Aquí los últimos {mostrados}:\n\n"
+        )
+ 
+    # ── Líneas por producto ─────────────────────────────────
+    lineas = []
+    for i, p in enumerate(productos, 1):
+        nombre    = p["nombre"] or "Sin nombre"
+        talla     = f" · Talla {p['talla']}" if p.get("talla") else ""
+        precio    = f"S/ {float(p['precio_venta_pen']):.2f}" if p.get("precio_venta_pen") else "sin precio"
+        stock     = int(p["stock"])
+        categoria = f" [{p['categoria']}]" if p.get("categoria") else ""
+ 
+        # Alerta visual si el stock está bajo
+        stock_emoji = "⚠️" if 0 < stock <= 5 else ("❌" if stock == 0 else "📦")
+ 
+        lineas.append(
+            f"{i}. *{nombre}*{talla}{categoria}\n"
+            f"   💰 {precio} · {stock_emoji} Stock: {stock} uds"
+        )
+ 
+    # ── Pie de página si hay más de 10 ─────────────────────
+    pie = ""
+    if total > 10 and not filtro:
+        pie = (
+            f"\n\n_Mostrando los últimos {mostrados} de {total} productos._\n"
+            "Para buscar uno específico dime, por ejemplo:\n"
+            "_'muéstrame mis blusas'_ o _'qué tengo en talla M'_"
+        )
+ 
+    respuesta = encabezado + "\n".join(lineas) + pie
+ 
+    return {
+        **state,
+        "respuesta": respuesta,
+        "sub_estado": "",
+        "datos_pendientes": {},
+    }
