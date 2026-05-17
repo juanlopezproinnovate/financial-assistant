@@ -400,8 +400,8 @@ class GeminiService:
             f"Responde SOLO con JSON:\n"
             f'{{"match": "exacto"|"parcial"|"ninguno", "indice": 1..N|null}}\n'
             f"- exacto: hay UNO que claramente es el mismo producto y la talla coincide.\n"
-            f"- parcial: hay similitud pero la talla es distinta, o hay varios posibles.\n"
-            f"- ninguno: ninguno coincide.\n"
+            f"- parcial: hay similitud pero la talla es distinta, o hay varios posibles, o el usuario usó un nombre genérico (ej. 'polo') y el catálogo tiene variantes específicas.\n"
+            f"- ninguno: definitivamente no tiene relación con ninguno de los candidatos.\n"
             f"indice: número del producto si match=exacto, null en cualquier otro caso."
         )
         try:
