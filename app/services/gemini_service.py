@@ -411,7 +411,7 @@ class GeminiService:
                 temperature=0.0,
                 max_tokens=64,
             )
-            resultado = self._parsear(response.choices[0].message.content)
+            resultado = self._parsear(raw)
             match_tipo = resultado.get("match", "ninguno")
             indice = resultado.get("indice")
 
@@ -438,6 +438,7 @@ class GeminiService:
         )
         try:
             raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=64, temperature=0.0)
+            return self._parsear(raw)
         except Exception as e:
             logger.error(f"[Groq] extraer_datos_stock_inicial error: {e}")
             return {"cantidad": None, "talla": None, "precio_costo": None}
@@ -452,6 +453,7 @@ class GeminiService:
         )
         try:
             raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=80, temperature=0.3)
+            return raw
         except Exception:
             precio_str = f" a S/{precio:.2f}" if precio else ""
             return f'No tengo "{nombre}" en tu catálogo. ¿Lo agrego{precio_str} (sí/no)?'
@@ -541,13 +543,11 @@ class GeminiService:
     - Solo responde el texto, sin JSON"""
 
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[{"role": "user", "content": prompt}],
+            return await _groq_chat(
+                [{"role": "user", "content": prompt}],
                 temperature=0.4,
                 max_tokens=200,
             )
-            return response.choices[0].message.content.strip()
         except Exception:
             tv  = datos.get("total_ventas", 0)
             tg  = datos.get("total_gastos", 0)
@@ -579,6 +579,7 @@ Si no entiendes qué cambiar, devuelve {{}}.
 No incluyas texto adicional ni markdown."""
         try:
             raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=150, temperature=0.1)
+            return raw
         except Exception as e:
             logger.error(f"[Groq] interpretar_edicion error: {e}")
             return {}
