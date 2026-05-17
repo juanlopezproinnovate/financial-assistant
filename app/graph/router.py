@@ -90,9 +90,10 @@ async def router_node(state: QuriState) -> QuriState:
                 "historial": historial,
                 "intent": intent_detectado,
                 "datos_nlp": result.get("datos", {}),
+                "items": result.get("items", []),
                 "sub_estado": "",           # limpiar sub_estado
                 "datos_pendientes": {},
-                "siguiente_nodo": _intent_a_nodo(intent_detectado),
+                "siguiente_nodo": _intent_a_nodo(intent_detectado)
             }
 
         # Si no → continuar en el sub_estado actual
@@ -108,9 +109,10 @@ async def router_node(state: QuriState) -> QuriState:
             "historial": historial,
             "intent": intent_detectado,
             "datos_nlp": result.get("datos", {}),
+            "items": result.get("items", []),
             "sub_estado": sub_estado,
             "datos_pendientes": datos_temp,
-            "siguiente_nodo": "sub_estado_activo",
+            "siguiente_nodo": "sub_estado_activo"            
         }
 
     # ── 4. Flujo normal: detectar intent con LLM ───────────
@@ -123,6 +125,7 @@ async def router_node(state: QuriState) -> QuriState:
 
     intent   = result.get("intent", "DESCONOCIDO")
     datos    = result.get("datos", {})
+    items    = result.get("items", []) 
     nodo_dst = _intent_a_nodo(intent)
 
     logger.info(f"[Router] {telefono} | intent={intent} → nodo={nodo_dst}")
@@ -135,6 +138,7 @@ async def router_node(state: QuriState) -> QuriState:
         "historial": historial,
         "intent": intent,
         "datos_nlp": datos,
+        "items": items,    
         "sub_estado": "",
         "datos_pendientes": datos_temp,
         "siguiente_nodo": nodo_dst,

@@ -1,17 +1,8 @@
-"""
-app/routers/webhook.py  (v3 — LangGraph)
-
-Responsabilidad única: recibir eventos de YCloud y llamar al grafo.
-Toda la lógica de negocio vive en app/graph/.
-
-El flujo es:
-  YCloud POST → _handle_inbound → _process_text → run_graph → send_text
-"""
-
+import asyncio
 import os
 import logging
 import uuid
-from fastapi import APIRouter, Request, Header, HTTPException, status
+from fastapi import APIRouter, Request, Header, HTTPException, status, BackgroundTasks
 
 from app.config import settings
 from app.services import ycloud
@@ -35,6 +26,7 @@ def _verify_token(token: str | None) -> None:
 @router.post("")
 async def receive_event(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_ycloud_webhook_token: str | None = Header(default=None),
 ):
     _verify_token(x_ycloud_webhook_token)
@@ -44,14 +36,16 @@ async def receive_event(
     logger.info(f"📥 Evento YCloud: {event_type}")
 
     if event_type == "whatsapp.inbound_message.received":
-        await _handle_inbound(body)
+        # ✅ Encolar en background y retornar 200 YA
+        background_tasks.add_task(_handle_inbound, body)
+
     elif event_type == "whatsapp.message.updated":
         wa_msg = body.get("whatsappMessage", {})
         logger.info(f"📊 Estado | id={wa_msg.get('id')} | status={wa_msg.get('status')}")
     else:
         logger.debug(f"Evento ignorado: {event_type}")
 
-    return {"status": "ok"}
+    return {"status": "ok"}   # ← YCloud recibe esto inmediatamente
 
 
 async def _handle_inbound(body: dict) -> None:
@@ -81,6 +75,23 @@ async def _handle_inbound(body: dict) -> None:
         logger.info(f"   Tipo no manejado: {msg_type}")
 
 
+async def _process_text(from_number: str, text: str, es_audio: bool = False) -> None:
+    try:
+        respuesta = await run_graph(
+            telefono=from_number,
+            mensaje=text,
+            es_audio=es_audio,
+        )
+        await ycloud.send_text(from_number, respuesta)
+
+        if es_audio:
+            await _responder_con_voz(from_number, respuesta)
+
+    except Exception as e:
+        logger.error(f"[_process_text] Error: {e}", exc_info=True)
+        await ycloud.send_text(from_number, "Tuve un error técnico. Intenta de nuevo 🙏")
+
+
 async def _process_audio(from_number: str, msg: dict) -> None:
     await ycloud.send_text(from_number, "🎙️ Escuchando tu audio...")
 
@@ -101,25 +112,6 @@ async def _process_audio(from_number: str, msg: dict) -> None:
     logger.info(f"[Audio→Texto] {from_number}: '{texto_transcrito}'")
     await ycloud.send_text(from_number, f"🎙️ Escuché: «{texto_transcrito}»")
     await _process_text(from_number, texto_transcrito, es_audio=True)
-
-
-async def _process_text(from_number: str, text: str, es_audio: bool = False) -> None:
-    try:
-        # ── Todo el procesamiento vive en el grafo ──
-        respuesta = await run_graph(
-            telefono=from_number,
-            mensaje=text,
-            es_audio=es_audio,
-        )
-
-        await ycloud.send_text(from_number, respuesta)
-
-        if es_audio:
-            await _responder_con_voz(from_number, respuesta)
-
-    except Exception as e:
-        logger.error(f"[_process_text] Error: {e}", exc_info=True)
-        await ycloud.send_text(from_number, "Tuve un error técnico. Intenta de nuevo 🙏")
 
 
 async def _responder_con_voz(from_number: str, texto: str) -> None:
