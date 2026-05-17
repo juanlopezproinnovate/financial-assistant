@@ -621,8 +621,14 @@ async def catalogo_node(state: QuriState) -> QuriState:
 # ══════════════════════════════════════════════════════════
 
 async def inventario_node(state: QuriState) -> QuriState:
-    datos        = state.get("datos_nlp", {})
-    negocio_id   = state["negocio_id"]
+    negocio_id = state["negocio_id"]
+    
+    # Extraer el primer item (o datos_nlp por compatibilidad)
+    items = state.get("items") or []
+    if items:
+        datos = items[0]
+    else:
+        datos = state.get("datos_nlp", {})
 
     if not datos.get("producto"):
         formulario = {
@@ -679,6 +685,8 @@ async def inventario_node(state: QuriState) -> QuriState:
             "operacion_stock":          f"inventario_{tipo_inv}",
             "cantidad_stock":           cantidad,
             "nombre_producto_original": nombre_producto,
+            "precio_venta":             precio_venta,
+            "precio_costo":             precio_costo,
         }
         return {
             **state,
@@ -688,49 +696,32 @@ async def inventario_node(state: QuriState) -> QuriState:
         }
 
     # sin_match
-    if precio_venta is not None:
-        separado      = await gemini_service.extraer_nombre_y_talla(nombre_producto)
-        nombre_limpio = separado.get("nombre") or nombre_producto.strip().title()
-        talla         = separado.get("talla")
-        formulario    = {
-            "nombre": nombre_limpio, "talla": talla,
-            "stock": cantidad, "precio_venta": precio_venta, "precio_compra": precio_costo,
-        }
-        talla_linea = f"📐 *Talla:* {talla}\n" if talla else "📐 *Talla:* (no especificada)\n"
-        respuesta = (
-            f"📝 *Nombre:* {nombre_limpio}\n{talla_linea}"
-            f"📦 *Stock:* {cantidad}\n"
-            f"💰 *Precio de Venta:* {'S/ '+str(precio_venta) if precio_venta else '(no especificado)'}\n\n"
-            f"¿Queda así? Escribe *guardar*, sigue editando, o *cancelar*."
-        )
-        datos_pendientes = {
-            "operacion_stock": f"inventario_{tipo_inv}",
-            "cantidad_stock": cantidad,
-            "nombre_producto_original": nombre_producto,
-            "formulario_producto": formulario,
-        }
-        return {
-            **state,
-            "respuesta": respuesta,
-            "sub_estado": "ESPERANDO_DATOS_PRODUCTO_NUEVO",
-            "datos_pendientes": _persist_sub_estado(datos_pendientes, "ESPERANDO_DATOS_PRODUCTO_NUEVO"),
-        }
-
-    respuesta = (
-        f"Este producto no está en tu catálogo 🔍\n\n"
-        f"¿Quieres agregar *{nombre_producto}* como producto nuevo?\n"
-        f"Responde *Sí* o *Cancelar*."
-    )
+    separado      = await gemini_service.extraer_nombre_y_talla(nombre_producto)
+    nombre_limpio = separado.get("nombre") or nombre_producto.strip().title()
+    talla         = separado.get("talla")
+    formulario    = {
+        "nombre": nombre_limpio, 
+        "talla": talla,
+        "cantidad": cantidad, 
+        "precio_venta": precio_venta, 
+        "precio_compra": precio_costo,
+    }
     datos_pendientes = {
         "operacion_stock": f"inventario_{tipo_inv}",
         "cantidad_stock": cantidad,
         "nombre_producto_original": nombre_producto,
+        "formulario_producto": formulario,
+        "es_desde_venta": False
     }
+    
+    from app.graph.nodes.producto_guiado import agregar_producto_guiado
+    resultado = await agregar_producto_guiado(negocio_id, "", datos_pendientes)
+    
     return {
         **state,
-        "respuesta": respuesta,
-        "sub_estado": "ESPERANDO_DECISION_PRODUCTO_NUEVO",
-        "datos_pendientes": _persist_sub_estado(datos_pendientes, "ESPERANDO_DECISION_PRODUCTO_NUEVO"),
+        "respuesta": f"Este producto no está en tu catálogo 🔍\nVamos a agregarlo 📦\n\n{resultado['respuesta']}",
+        "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
+        "datos_pendientes": _persist_sub_estado({**resultado.get("datos", {}), "sub_estado": "AGREGAR_PRODUCTO_GUIADO"}, "AGREGAR_PRODUCTO_GUIADO"),
     }
 
 
@@ -888,18 +879,43 @@ async def _handle_seleccion_stock(state, datos, negocio_id, mensaje, msg_lower):
         "agrega", "nuevo", "no pertenece", "ningun", "no aparece"
     ])
 
-    if es_nuevo and operacion == "venta":
-        respuesta = (
-            f"Entendido 🔍\n\n¿Qué quieres hacer?\n"
-            f"1️⃣ *Agregar* al catálogo\n"
-            f"2️⃣ *Seguir* sin añadir al stock\n\n"
-            f"_(La venta se registrará cuando elijas)_"
-        )
-        return {
-            **state, "respuesta": respuesta,
-            "sub_estado": "ESPERANDO_DECISION_PRODUCTO_NUEVO",
-            "datos_pendientes": {**datos, "sub_estado": "ESPERANDO_DECISION_PRODUCTO_NUEVO"},
-        }
+    if es_nuevo:
+        if operacion == "venta":
+            respuesta = (
+                f"Entendido 🔍\n\n¿Qué quieres hacer?\n"
+                f"1️⃣ *Agregar* al catálogo\n"
+                f"2️⃣ *Seguir* sin añadir al stock\n\n"
+                f"_(La venta se registrará cuando elijas)_"
+            )
+            return {
+                **state, "respuesta": respuesta,
+                "sub_estado": "ESPERANDO_DECISION_PRODUCTO_NUEVO",
+                "datos_pendientes": {**datos, "sub_estado": "ESPERANDO_DECISION_PRODUCTO_NUEVO"},
+            }
+        else:
+            separado = await gemini_service.extraer_nombre_y_talla(nombre_orig)
+            nombre_limpio = separado.get("nombre") or nombre_orig.strip().title()
+            talla = separado.get("talla")
+            formulario = {
+                "nombre": nombre_limpio, 
+                "talla": talla,
+                "cantidad": cantidad, 
+                "precio_venta": datos.get("precio_venta"), 
+                "precio_compra": datos.get("precio_costo"),
+            }
+            nuevos_datos = {
+                **datos,
+                "formulario_producto": formulario,
+                "es_desde_venta": False
+            }
+            from app.graph.nodes.producto_guiado import agregar_producto_guiado
+            resultado = await agregar_producto_guiado(negocio_id, "", nuevos_datos)
+            return {
+                **state,
+                "respuesta": f"Entendido, vamos a agregarlo al catálogo 📦\n\n{resultado['respuesta']}",
+                "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
+                "datos_pendientes": {**resultado.get("datos", {}), "sub_estado": "AGREGAR_PRODUCTO_GUIADO"},
+            }
 
     try:
         seleccion = int(mensaje.strip())
@@ -1046,6 +1062,9 @@ async def _handle_decision_producto_nuevo(state, datos, negocio_id, mensaje):
     decision = await gemini_service.interpretar_decision_producto_nuevo(mensaje)
     accion   = decision["accion"]
 
+    operacion = datos.get("operacion_stock", "venta")
+    es_desde_venta = (operacion == "venta")
+
     if accion == "AGREGAR":
         separado      = await gemini_service.extraer_nombre_y_talla(nombre_prod)
         nombre_limpio = separado.get("nombre") or nombre_prod.strip().title()
@@ -1053,18 +1072,18 @@ async def _handle_decision_producto_nuevo(state, datos, negocio_id, mensaje):
         formulario    = {
             "nombre": nombre_limpio, 
             "talla": talla,
-            "cantidad": None, # para guiado es cantidad, no stock
+            "cantidad": cantidad if not es_desde_venta else None, # si es inventario, prellenar cantidad
             "precio_venta": precio_unitario, 
             "precio_compra": None,
         }
         nuevos_datos = {
             **datos, 
             "formulario_producto": formulario, 
-            "es_desde_venta": True
+            "es_desde_venta": es_desde_venta
         }
         
-        # Llamar al guiado con mensaje vacío para que lance la primera pregunta
-        resultado = await agregar_producto_guiado(negocio_id, "", nuevos_datos)
+        # Pasar el mensaje original para que pueda extraer los datos si el usuario los mandó de golpe
+        resultado = await agregar_producto_guiado(negocio_id, mensaje, nuevos_datos)
         
         return {
             **state,
@@ -1073,7 +1092,15 @@ async def _handle_decision_producto_nuevo(state, datos, negocio_id, mensaje):
             "datos_pendientes": {**resultado["datos"], "sub_estado": "AGREGAR_PRODUCTO_GUIADO"},
         }
 
-    # CONTINUAR o CANCELAR → registrar venta sin producto_id
+    if accion == "CANCELAR" or not es_desde_venta:
+        return {
+            **state, 
+            "respuesta": "Operación cancelada. ¿En qué más te ayudo? 😊", 
+            "sub_estado": "", 
+            "datos_pendientes": {}
+        }
+
+    # CONTINUAR y es desde venta → registrar venta sin producto_id
     simbolo       = datos.get("venta_moneda", "S/")
     nombre_propio = datos.get("venta_nombre_propio", "Comerciante")
     tx_id = await _guardar_transaccion(
