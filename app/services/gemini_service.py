@@ -78,14 +78,12 @@ Frases: vendí, vendiste, vendimos, salió una, me llevaron, acabo de vender
 ]
 
 REGLAS DE PRECIO PARA VENTA:
-- El precio mencionado SIN "cada uno" / "c/u" / "por unidad" / "uno" 
-  es SIEMPRE el TOTAL de esa línea, no el unitario.
+- El precio mencionado SIN "cada uno" / "c/u" / "por unidad" es SIEMPRE el TOTAL.
 - precio_unitario = total / cantidad
 - Si dice "vendí 2 polos a 70 soles" → total:70, precio_unitario:35
 - Si dice "vendí 2 polos a 35 cada uno" → precio_unitario:35, total:70
-- Si dice "vendí 2 polos a 35 c/u" → precio_unitario:35, total:70
-- Si dice "vendí 2 polos a 35 por unidad" → precio_unitario:35, total:70
-- Si dice "vendí 1 polo a 35" → total:35, precio_unitario:35
+- Si el usuario NO menciona precio → omite precio_unitario y total (ponlos null, NO 0).
+- NUNCA inventes ni asumas un precio si el usuario no lo mencionó.
 - Si falta precio o cantidad de algún item → pídelos en "respuesta"
 
 SEÑALES DE PRECIO UNITARIO (precio se multiplica por cantidad):
