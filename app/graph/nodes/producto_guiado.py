@@ -79,6 +79,34 @@ def _mensaje_confirmacion(formulario: dict) -> str:
     )
 
 
+def _extraer_nombre_desde_edicion(mensaje: str) -> str | None:
+    """
+    Extrae el nombre del producto de frases de edición del tipo:
+      - "el nombre del producto es Polo Manga Larga"
+      - "cambia el nombre a Polo Manga Larga"
+      - "editalo por Polo Manga Larga"
+      - "el nombre es X editalo" (ignora palabras finales de comando)
+    """
+    _STOP_WORDS = {"editalo", "edítalo", "guarda", "guardar", "ok", "listo", "porfavor", "por favor"}
+    patterns = [
+        r"(?:el\s+)?nombre\s+(?:del\s+producto\s+)?(?:es|a|:)\s+([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+(?:" + "|".join(_STOP_WORDS) + r"))?$",
+        r"(?:cambia(?:lo)?|edita(?:lo)?|pon(?:lo)?)\s+(?:el\s+)?(?:nombre\s+)?(?:a|por|como)\s+([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+(?:" + "|".join(_STOP_WORDS) + r"))?$",
+        r"(?:nombre|llámalo|llamalo|se\s+llama)\s*[:=]?\s*([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+(?:" + "|".join(_STOP_WORDS) + r"))?$",
+    ]
+    msg = mensaje.strip()
+    for pat in patterns:
+        m = re.search(pat, msg, re.IGNORECASE)
+        if m:
+            nombre = m.group(1).strip()
+            # Quitar stop words que se hayan colado al final
+            for sw in _STOP_WORDS:
+                if nombre.lower().endswith(sw):
+                    nombre = nombre[:-(len(sw))].strip()
+            if len(nombre) >= 2:
+                return nombre.strip()
+    return None
+
+
 def _extraer_campos_iniciales_regex(mensaje: str) -> dict:
     """
     Extractor regex robusto para el PRIMER mensaje del usuario donde manda
@@ -157,6 +185,10 @@ def _extraer_campos_iniciales_regex(mensaje: str) -> dict:
     )
     if corte_pattern:
         nombre_raw = msg[:corte_pattern.start()].strip().rstrip(",;-")
+        # Limpiar prefijos de ejemplo como "Ej:", "(Ej:", "Ejemplo:"
+        nombre_raw = re.sub(r"^\(?[Ee]j(?:emplo)?[.:]?\s*", "", nombre_raw).strip()
+        # Quitar guiones bajos y paréntesis iniciales
+        nombre_raw = nombre_raw.lstrip("(_").rstrip(")_")
         if nombre_raw and len(nombre_raw) >= 2:
             resultado["nombre"] = nombre_raw.strip()
     elif not any(resultado.values()):
@@ -434,10 +466,30 @@ async def _handle_confirmacion(
             "agregar_otro": False,
         }
 
+    # ── Fast-path regex: guardar / agregar_otro (no depender del LLM para esto) ──
+    _GUARDAR_WORDS = {"guardar", "si", "sí", "ok", "dale", "listo", "bien",
+                      "confirmar", "perfecto", "correcto", "queda", "ya", "va"}
+    _OTRO_WORDS   = {"agregar otro", "otro producto", "otro", "más", "mas", "siguiente"}
+
+    if msg_lower.strip() in _GUARDAR_WORDS:
+        return await _guardar_producto(negocio_id, formulario, datos)
+
+    if any(msg_lower.strip() == w or msg_lower.strip().startswith(w) for w in _OTRO_WORDS):
+        return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)
+
+    # ── Detectar renombre explícito antes del LLM: "el nombre es X", "editalo por X" ──
+    nombre_extraido = _extraer_nombre_desde_edicion(mensaje)
+
     # ── Interpretar Intención y Cambios con LLM ──
     interpretacion = await gemini_service.interpretar_accion_inventario(mensaje, formulario)
     accion = interpretacion.get("accion", "DESCONOCIDO")
     campos_llm = interpretacion.get("cambios", {})
+
+    # Si el LLM no extrajo nombre pero la regex sí, inyectarlo
+    if nombre_extraido and not campos_llm.get("nombre"):
+        campos_llm["nombre"] = nombre_extraido
+        if accion == "DESCONOCIDO":
+            accion = "EDITAR"
 
     if accion == "TERMINAR":
         return await _guardar_producto(negocio_id, formulario, datos)
