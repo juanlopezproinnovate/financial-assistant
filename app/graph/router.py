@@ -100,6 +100,13 @@ async def router_node(state: QuriState) -> QuriState:
             "no está" in msg_lower or 
             "no hay" in msg_lower
         )
+        
+        import re
+        if sub_estado == "AGREGAR_PRODUCTO_GUIADO":
+            if (re.match(r"^(?:s/\s*)?\d+(?:[.,]\d+)?\s*(?:soles|unidades)?$", msg_lower) or 
+                "unidades" in msg_lower or "stock" in msg_lower or 
+                "talla" in msg_lower or msg_lower in ["unica", "única"]):
+                es_respuesta_menu = True
 
         if intent_detectado in INTENTS_INTERRUPTORES and not es_respuesta_menu:
             logger.info(

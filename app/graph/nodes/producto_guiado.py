@@ -213,8 +213,8 @@ def _extraer_campos_iniciales_regex(mensaje: str) -> dict:
         nombre_raw = nombre_raw.lstrip("(_").rstrip(")_")
         if nombre_raw and len(nombre_raw) >= 2:
             resultado["nombre"] = nombre_raw.strip()
-    elif not any(resultado.values()):
-        # Si no detectamos nada más, el mensaje completo es el nombre
+    elif not any(resultado.values()) and not re.match(r"^\d+(?:\.\d+)?$", msg.strip().replace(",", ".")):
+        # Si no detectamos nada más, y NO es un número puro, el mensaje completo es el nombre
         resultado["nombre"] = msg.strip()
 
     return resultado
@@ -442,12 +442,15 @@ async def agregar_producto_guiado(
             if "talla" not in formulario or not formulario.get("talla"):
                 # Si falta talla y mandó un número, debe ser la talla (ej. 32)
                 campos["talla"] = str(val_int)
+                campos.pop("nombre", None)
             elif formulario.get("precio_venta") is None:
                 # Si falta precio_venta, es el precio
                 campos["precio_venta"] = val_float
+                campos.pop("nombre", None)
             elif formulario.get("cantidad") is None:
                 # Si falta cantidad, es el stock
                 campos["cantidad"] = int(val_int)
+                campos.pop("nombre", None)
 
     # Aplicar al formulario
     if campos.get("nombre"):
