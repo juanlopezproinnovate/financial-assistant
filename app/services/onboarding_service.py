@@ -1132,6 +1132,21 @@ class OnboardingService:
                     "¡Estoy aquí para ayudarte! 💪"
                 )
 
+            # ── ESCAPE 4: "agregar otro" / "si" / "claro" — solo si no hay formulario activo ──
+            if not formulario_activo and any(w in msg_lower for w in [
+                "agregar otro", "otro", "sí", "si", "claro", "dale", "siguiente"
+            ]) and len(msg_lower) <= 15:
+                return (
+                    f"¡Genial! 📦 Llevas *{productos_count}* producto(s) cargado(s).\n\n"
+                    "Cuéntame los datos del siguiente producto:\n"
+                    "📝 *Nombre* (ej: Polo básico)\n"
+                    "📐 *Talla* (ej: M, 28, o Única)\n"
+                    "💰 *Precio de venta*\n"
+                    "📦 *Stock*\n"
+                    "💵 *Precio de compra* (opcional)\n\n"
+                    "_(Ej: Polo básico talla M, precio 35, stock 50)_"
+                )
+
             resultado = await agregar_producto_guiado(negocio_id, mensaje, datos_temp)
 
             if resultado["finalizado"]:
