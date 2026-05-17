@@ -503,30 +503,64 @@ class GeminiService:
     #  REPORTES
     # ──────────────────────────────────────────────────────
 
+    # REEMPLAZAR el prompt dentro del método
     async def generar_resumen_reporte(self, datos: dict) -> str:
-        prompt = f"""Eres Boti. Genera un resumen de reporte para WhatsApp con estos datos:
-{json.dumps(datos, ensure_ascii=False)}
+        periodo_txt = {
+            "hoy": "hoy",
+            "ayer": "ayer",
+            "semana": "esta semana",
+            "mes": "este mes",
+        }.get(datos.get("periodo", "hoy"), "hoy")
 
-Reglas:
-- Máximo 5 líneas
-- Emojis (💰📦📊✅)
-- Mostrar ventas, gastos y ganancia neta en soles
-- Español peruano natural
-- SIN asteriscos ni markdown
-- Terminar con frase motivadora corta
-Solo responde el texto, sin JSON."""
+        producto_top_linea = ""
+        if datos.get("producto_top"):
+            producto_top_linea = f'- Producto estrella: "{datos["producto_top"]}" con S/ {datos.get("producto_top_monto", 0):.2f} en ventas\n'
 
-        try:
-            raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=200, temperature=0.4)
-        except Exception:
-            tv = datos.get("total_ventas", 0)
-            tg = datos.get("total_gastos", 0)
-            return (
-                f"📊 Reporte de {datos.get('periodo', 'hoy')}:\n"
-                f"💰 Ventas: S/{tv:.2f}\n"
-                f"📦 Gastos: S/{tg:.2f}\n"
-                f"✅ Ganancia: S/{tv - tg:.2f}"
-            )
+        prompt = f"""Eres Quri. Genera un reporte para WhatsApp con estos datos:
+        - Período: {periodo_txt}
+        - Ventas totales: S/ {datos.get('total_ventas', 0):.2f}
+        - Gastos totales: S/ {datos.get('total_gastos', 0):.2f}
+        - Ganancia neta: S/ {datos.get('ganancia_neta', 0):.2f}
+        - Número de ventas: {datos.get('num_transacciones', 0)}
+        - Unidades vendidas: {datos.get('total_unidades', 0)}
+        {producto_top_linea}
+        Reglas:
+        - Usa EXACTAMENTE este formato:
+        📊 Tu reporte está listo.
+        Aquí tienes el resumen de tu tienda de {periodo_txt}:
+
+        🛍️ Ventas del día: S/ [total_ventas]
+        💸 Gastos del día: S/ [total_gastos]
+        💰 Ganancia neta: S/ [ganancia_neta]
+        📦 Unidades vendidas: [total_unidades]
+        ⭐ Producto estrella: [producto_top o "Sin datos aún"]
+
+        [frase motivadora corta en español peruano]
+
+        - SIN asteriscos ni markdown
+        - Solo responde el texto, sin JSON"""
+
+            try:
+                response = await client.chat.completions.create(
+                    model=MODELO_NLP,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.4,
+                    max_tokens=200,
+                )
+                return response.choices[0].message.content.strip()
+            except Exception:
+                tv = datos.get("total_ventas", 0)
+                tg = datos.get("total_gastos", 0)
+                top = datos.get("producto_top", "Sin datos aún")
+                return (
+                    f"📊 Tu reporte está listo.\n"
+                    f"Aquí tienes el resumen de tu tienda de {periodo_txt}:\n\n"
+                    f"🛍️ Ventas: S/ {tv:.2f}\n"
+                    f"💸 Gastos: S/ {tg:.2f}\n"
+                    f"💰 Ganancia neta: S/ {tv - tg:.2f}\n"
+                    f"📦 Unidades vendidas: {datos.get('total_unidades', 0)}\n"
+                    f"⭐ Producto estrella: {top}"
+                )
 
     # ──────────────────────────────────────────────────────
     #  EDICIÓN DE TRANSACCIONES

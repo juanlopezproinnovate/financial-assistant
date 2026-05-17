@@ -113,6 +113,7 @@ async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> li
     ]
 
 
+# REEMPLAZAR la función completa
 async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:
     filtros = {
         "hoy":    "fecha = CURRENT_DATE",
@@ -123,27 +124,46 @@ async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:
     where = filtros.get(periodo, filtros["hoy"])
     pool  = await get_pool()
     async with pool.acquire() as conn:
+        # ── Totales generales ──
         row = await conn.fetchrow(
             f"""
             SELECT
                 COALESCE(SUM(monto) FILTER (WHERE tipo='venta'), 0) AS total_ventas,
                 COALESCE(SUM(monto) FILTER (WHERE tipo='gasto'), 0) AS total_gastos,
-                COUNT(*)           FILTER (WHERE tipo='venta')       AS num_ventas
+                COALESCE(SUM(cantidad) FILTER (WHERE tipo='venta'), 0) AS total_unidades,
+                COUNT(*) FILTER (WHERE tipo='venta') AS num_ventas
             FROM transacciones
             WHERE negocio_id = $1 AND {where}
             """,
             negocio_id,
         )
+
+        # ── Producto más vendido (por monto) ──
+        top_row = await conn.fetchrow(
+            f"""
+            SELECT descripcion, SUM(monto) AS total_monto
+            FROM transacciones
+            WHERE negocio_id = $1 AND tipo = 'venta' AND {where}
+              AND descripcion IS NOT NULL
+            GROUP BY descripcion
+            ORDER BY total_monto DESC
+            LIMIT 1
+            """,
+            negocio_id,
+        )
+
     tv = float(row["total_ventas"])
     tg = float(row["total_gastos"])
     return {
-        "periodo":           periodo,
-        "total_ventas":      tv,
-        "total_gastos":      tg,
-        "num_transacciones": int(row["num_ventas"]),
-        "ganancia_neta":     tv - tg,
+        "periodo":            periodo,
+        "total_ventas":       tv,
+        "total_gastos":       tg,
+        "num_transacciones":  int(row["num_ventas"]),
+        "total_unidades":     int(row["total_unidades"]),
+        "ganancia_neta":      tv - tg,
+        "producto_top":       top_row["descripcion"] if top_row else None,
+        "producto_top_monto": float(top_row["total_monto"]) if top_row else 0.0,
     }
-
 
 def _persist_sub_estado(datos_pendientes: dict, sub_estado: str) -> dict:
     """Agrega sub_estado al dict que se persistirá en datos_temporales."""
