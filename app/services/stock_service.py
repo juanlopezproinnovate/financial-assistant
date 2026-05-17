@@ -56,6 +56,9 @@ class StockService:
                     s.cantidad_minima,
                     GREATEST(
                         similarity(p.nombre, $2),
+                        similarity(p.nombre || ' ' || COALESCE(p.talla, ''), $2),
+                        similarity(p.nombre || ' talla ' || COALESCE(p.talla, ''), $2),
+                        CASE WHEN p.nombre ILIKE '%' || $2 || '%' THEN 0.4 ELSE 0 END,
                         COALESCE(
                             (SELECT MAX(similarity(v, $2))
                                FROM unnest(p.nombre_variantes) v),
@@ -68,6 +71,9 @@ class StockService:
                   AND p.activo = true
                   AND GREATEST(
                         similarity(p.nombre, $2),
+                        similarity(p.nombre || ' ' || COALESCE(p.talla, ''), $2),
+                        similarity(p.nombre || ' talla ' || COALESCE(p.talla, ''), $2),
+                        CASE WHEN p.nombre ILIKE '%' || $2 || '%' THEN 0.4 ELSE 0 END,
                         COALESCE(
                             (SELECT MAX(similarity(v, $2))
                                FROM unnest(p.nombre_variantes) v),
