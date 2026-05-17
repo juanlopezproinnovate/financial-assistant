@@ -993,14 +993,14 @@ class OnboardingService:
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                 return (
                     "¡Genial! Vamos a cargar tu inventario 📦\n\n"
-                    "Necesito estos datos:\n"
-                    "📝 Nombre — ej: Polo básico, Jean slim\n"
-                    "📐 Talla — ej: S, M, L, XL, 28, 30\n"
-                    "💰 Precio de venta — ej: S/ 35\n"
-                    "📦 Stock — cuántas unidades tienes\n"
-                    "💵 Precio de compra — opcional\n\n"
-                    "Puedes enviarlo todo junto o paso a paso 👇\n"
-                    "(Ej: Jean slim talla 28, precio 45 soles, stock 20)"
+                    "Puedes enviarme los datos de tu primer producto.\n"
+                    "Puedes escribirlo todo junto o poco a poco 👇\n\n"
+                    "📝 *Nombre* — ej: Polo básico, Jean slim\n"
+                    "📐 *Talla* — ej: S, M, L, XL, 28, 30 (o 'talla única')\n"
+                    "💰 *Precio de venta* — ej: S/ 35\n"
+                    "📦 *Stock* — cuántas unidades tienes\n"
+                    "💵 *Precio de compra* — opcional\n\n"
+                    "_(Ej: Jean slim talla 28, precio 45 soles, stock 20)_"
                 )
 
             elif cargar_despues:
@@ -1040,15 +1040,23 @@ class OnboardingService:
             msg_lower       = mensaje.strip().lower()
             productos_count = datos_temp.get("inv_productos_cargados", 0)
 
-            # Detectar si quiere salir del inventario
-            if any(w in msg_lower for w in ["después", "despues", "luego", "dashboard", "no", "listo", "terminar"]):
+            # Detectar si quiere salir / terminar el inventario
+            # Solo cuando NO está en medio de llenar un formulario
+            formulario_activo = bool(datos_temp.get("formulario_producto"))
+            palabras_salir = ["después", "despues", "luego", "dashboard", "terminar", "finalizar"]
+            # "listo" / "no" solo terminan si no hay formulario activo
+            if not formulario_activo:
+                palabras_salir += ["no", "listo"]
+
+            if any(w in msg_lower for w in palabras_salir) and not formulario_activo:
                 await self.completar_onboarding(negocio_id)
                 await self.upsert_sesion(negocio_id, "activo", {})
                 nombre_prop    = datos_temp.get("nombre_propietario", "")
                 nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
+                prod_txt = f"Cargaste *{productos_count}* producto(s). " if productos_count > 0 else ""
                 return (
                     f"¡Todo listo, {nombre_prop}! 🎉\n\n"
-                    f"*{nombre_negocio}* ya está configurado en Quri.\n\n"
+                    f"*{nombre_negocio}* ya está configurado en Quri. {prod_txt}\n\n"
                     "Ahora puedes registrar tus operaciones:\n"
                     "📦 _'Vendí 3 polos a S/25 cada uno'_\n"
                     "💸 _'Gasté S/200 en mercadería'_\n"
@@ -1061,17 +1069,27 @@ class OnboardingService:
             if resultado["finalizado"]:
                 productos_count += 1
                 datos_temp["inv_productos_cargados"] = productos_count
-                datos_temp["formulario_producto"]    = {}
+                # Limpiar formulario para el próximo producto
+                datos_temp["formulario_producto"] = {}
+                datos_temp["inv_confirmado"]       = False
 
-                # Preguntar si quiere agregar otro
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+
+                if resultado.get("agregar_otro"):
+                    # El usuario ya dijo 'agregar otro' en el mismo mensaje de confirmación
+                    return (
+                        resultado["respuesta"] +
+                        f"\n\n📦 Llevas *{productos_count}* producto(s) 🎉\n"
+                        "Cuéntame los datos del siguiente producto:"
+                    )
+
                 return (
                     resultado["respuesta"] +
-                    f"\n\nLlevas *{productos_count}* producto(s) cargado(s) 🎉\n"
-                    "¿Quieres agregar otro? Escribe *otro* o *listo* para terminar."
+                    f"\n\n📦 Llevas *{productos_count}* producto(s) cargado(s) 🎉\n"
+                    "¿Quieres *agregar otro* o escribes *listo* para terminar?"
                 )
 
-            # Flujo intermedio — persistir y seguir
+            # Flujo intermedio — persistir datos parciales y seguir
             datos_temp.update(resultado["datos"])
             await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
             return resultado["respuesta"]
