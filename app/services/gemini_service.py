@@ -703,10 +703,10 @@ No incluyas texto adicional ni markdown."""
             f'- "cantidad" → stock disponible.\n'
             f'  Señales: "tengo", "stock", "unidades", "en stock tengo", "me quedan", "hay"\n'
             f'EJEMPLOS:\n'
-            f'- "jean básico XL que cuesta 23 soles" → precio_venta=23, precio_compra=null\n'
-            f'- "polo talla M, precio 35, me costó 15" → precio_venta=35, precio_compra=15\n'
-            f'- "blusa S, vale 50, lo compré a 20, tengo 10" → precio_venta=50, precio_compra=20, cantidad=10\n'
-            f'- "short talla M, precio 55 soles, stock 29" → precio_venta=55, precio_compra=null, cantidad=29\n'
+            f'- "jean básico XL que cuesta 23 soles" → {{"nombre": "Jean Básico", "talla": "XL", "precio_venta": 23, "cantidad": null, "precio_compra": null}}\n'
+            f'- "polo talla M, precio 35, me costó 15" → {{"nombre": "Polo", "talla": "M", "precio_venta": 35, "cantidad": null, "precio_compra": 15}}\n'
+            f'- "blusa S, vale 50, lo compré a 20, tengo 10" → {{"nombre": "Blusa", "talla": "S", "precio_venta": 50, "cantidad": 10, "precio_compra": 20}}\n'
+            f'- "short talla M, precio 55 soles, stock 29" → {{"nombre": "Short", "talla": "M", "precio_venta": 55, "cantidad": 29, "precio_compra": null}}\n'
         )
         fallback = {"nombre": None, "talla": None, "precio_venta": None, "cantidad": None, "precio_compra": None}
         try:
@@ -823,12 +823,16 @@ Responde ÚNICAMENTE con JSON:
                 m = re.search(r"cambia\s+(.+)\s+por\s+(.+)", msg)
                 if m:
                     return {"accion": "REEMPLAZAR", "valor": {"viejo": m.group(1).strip(), "nuevo": m.group(2).strip().title()}, "confianza": "baja"}
-            if any(w in msg for w in ["agregar", "añadir"]):
+            if any(w in msg for w in ["agregar", "añadir", "agrega", "añade"]):
                 partes = msg.split(maxsplit=1)
                 return {"accion": "AGREGAR", "valor": partes[1].strip().title() if len(partes) > 1 else None, "confianza": "baja"}
-            if any(w in msg for w in ["quitar", "eliminar", "borrar"]):
+            if any(w in msg for w in ["quitar", "eliminar", "borrar", "quita", "elimina", "borra"]):
                 nums = re.findall(r"\d+", msg)
-                return {"accion": "QUITAR", "valor": int(nums[0]) if nums else None, "confianza": "baja"}
+                if nums:
+                    return {"accion": "QUITAR", "valor": int(nums[0]), "confianza": "baja"}
+                else:
+                    partes = msg.split(maxsplit=1)
+                    return {"accion": "QUITAR", "valor": partes[1].strip() if len(partes) > 1 else None, "confianza": "baja"}
             return {"accion": "DESCONOCIDO", "valor": None, "confianza": "baja"}
 
     async def interpretar_accion_inventario(self, mensaje: str, producto_actual: dict) -> dict:
