@@ -247,7 +247,7 @@ async def venta_node(state: QuriState) -> QuriState:
         nombre_producto = item.get("producto", "producto")
         cantidad        = int(item.get("cantidad", 1))
         precio_unitario = item.get("precio_unitario")
-        total_venta     = float(item.get("total"))
+        total_venta = float(item.get("total")) if item.get("total") is not None else None
         moneda          = item.get("moneda", "PEN")
         simbolo         = SIMBOLOS.get(moneda, "S/")
         f_fecha         = item.get("fecha") or ahora.strftime("%Y-%m-%d")
@@ -268,19 +268,22 @@ async def venta_node(state: QuriState) -> QuriState:
                 precio_unitario = float(precio_catalogo)
                 total_venta     = precio_unitario * cantidad
             else:
-                # No hay precio en ningún lado → pedir al usuario
-                return {
-                    **state,
-                    "respuesta": (
-                        f"¿A cuánto vendiste *{nombre_producto}*? 💰\n"
-                        f"_(No tengo precio registrado para ese producto)_"
-                    ),
-                    "sub_estado": "",
-                    "datos_pendientes": {},
-                }
+                # ← CAMBIO: no interrumpir, agregar a pendientes
+                pendientes.append({
+                    **item,
+                    "estado_stock": "sin_precio",
+                    "candidatos": [],
+                    "nombre_producto": nombre_producto,
+                    "cantidad": cantidad,
+                    "precio_unitario": None,
+                    "total_venta": 0.0,
+                    "moneda": moneda,
+                    "simbolo": simbolo,
+                    "f_fecha": f_fecha,
+                    "f_hora": f_hora,
+                })
+                continue
         elif total_venta is None or total_venta == 0:
-            # sin_match o parcial, sin precio → guardamos en pendientes sin precio
-            # el flujo de selección lo resolverá
             total_venta = 0.0
 
         if estado_stock == "exacto":
@@ -379,6 +382,14 @@ async def venta_node(state: QuriState) -> QuriState:
             f"{lista}\n\nEscribe el número, o *0* si no está en la lista."
         )
         sub_estado = "ESPERANDO_SELECCION_STOCK"
+
+    elif primer_pendiente["estado_stock"] == "sin_precio":  # ← NUEVO
+        respuesta = (
+            respuesta_parcial +
+            f"¿A cuánto vendiste *{primer_pendiente['nombre_producto']}*? 💰\n"
+            f"_(No tengo precio registrado para ese producto)_"
+        )
+        sub_estado = "ESPERANDO_PRECIO_VENTA"
 
     else:  # sin_match
         respuesta = (

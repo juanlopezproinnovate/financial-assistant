@@ -309,6 +309,7 @@ class StockService:
                 "producto_id": producto_id,
                 "producto_nombre": producto["nombre"] if producto else nombre_producto,
                 "producto_talla": producto.get("talla") if producto else None,
+                "precio_venta": float(producto["precio_venta_pen"]) if producto and producto.get("precio_venta_pen") else None,
                 "candidatos": None,
             }
 
