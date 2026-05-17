@@ -81,29 +81,51 @@ def _mensaje_confirmacion(formulario: dict) -> str:
 
 def _extraer_nombre_desde_edicion(mensaje: str) -> str | None:
     """
-    Extrae el nombre del producto de frases de edición del tipo:
-      - "el nombre del producto es Polo Manga Larga"
-      - "cambia el nombre a Polo Manga Larga"
-      - "editalo por Polo Manga Larga"
-      - "el nombre es X editalo" (ignora palabras finales de comando)
+    Extrae el nombre nuevo del producto de CUALQUIER frase de edición.
+    Estrategia: detectar un verbo de comando + buscar el separador (por/a/como)
+    y tomar TODO lo que viene después como el nombre.
+    Funciona con:
+      - "edita el nombre del producto por Polo con Cuello"
+      - "cambia el nombre a Jean Slim Tela"
+      - "el nombre del producto es Blusa Floral"
+      - "el nombre es Polo Básico editalo"
     """
-    _STOP_WORDS = {"editalo", "edítalo", "guarda", "guardar", "ok", "listo", "porfavor", "por favor"}
-    patterns = [
-        r"(?:el\s+)?nombre\s+(?:del\s+producto\s+)?(?:es|a|:)\s+([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+(?:" + "|".join(_STOP_WORDS) + r"))?$",
-        r"(?:cambia(?:lo)?|edita(?:lo)?|pon(?:lo)?)\s+(?:el\s+)?(?:nombre\s+)?(?:a|por|como)\s+([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+(?:" + "|".join(_STOP_WORDS) + r"))?$",
-        r"(?:nombre|llámalo|llamalo|se\s+llama)\s*[:=]?\s*([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+(?:" + "|".join(_STOP_WORDS) + r"))?$",
-    ]
     msg = mensaje.strip()
-    for pat in patterns:
-        m = re.search(pat, msg, re.IGNORECASE)
+
+    # ── Capa 1: verbo de edición + separador "por/a/como" al final ──
+    # Detectar si hay un verbo de comando de edición
+    tiene_verbo_edicion = bool(re.search(
+        r"\b(?:edita(?:lo)?|cambia(?:lo)?|modifica|actualiza|pon(?:lo)?|cambiar|editar)\b",
+        msg, re.IGNORECASE
+    ))
+
+    if tiene_verbo_edicion:
+        # Buscar el ÚLTIMO "por", "a" o "como" que actúe como separador
+        # y tomar todo lo que viene después como el nombre
+        m = re.search(
+            r"\b(?:por|a|como)\s+([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s\-]+)$",
+            msg, re.IGNORECASE
+        )
         if m:
             nombre = m.group(1).strip()
-            # Quitar stop words que se hayan colado al final
-            for sw in _STOP_WORDS:
+            # Quitar palabras finales de comando que se hayan colado
+            for sw in ["editalo", "edítalo", "guarda", "guardar", "listo", "ok"]:
                 if nombre.lower().endswith(sw):
                     nombre = nombre[:-(len(sw))].strip()
             if len(nombre) >= 2:
                 return nombre.strip()
+
+    # ── Capa 2: patrones "el nombre es X" / "nombre: X" ──
+    m2 = re.search(
+        r"(?:el\s+)?nombre\s+(?:del\s+producto\s+)?(?:es|a|:)\s+"
+        r"([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s\-]+?)(?:\s+(?:editalo|edítalo|listo|guardar|ok))?$",
+        msg, re.IGNORECASE
+    )
+    if m2:
+        nombre = m2.group(1).strip()
+        if len(nombre) >= 2:
+            return nombre.strip()
+
     return None
 
 

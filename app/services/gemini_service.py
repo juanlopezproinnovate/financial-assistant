@@ -852,7 +852,13 @@ El usuario responde: "{mensaje}"
 Clasifica:
 TERMINAR     → guardar y terminar. Señales: "listo", "sí", "queda", "terminar", "ya".
 AGREGAR_OTRO → guardar y agregar otro. Señales: "otro", "más", "agregar otro".
-EDITAR       → cambiar algún campo. Extrae los nuevos valores. Si el usuario edita el "nombre", CORRIGE siempre los errores ortográficos y de tipeo (ej. "Poolo" -> "Polo", "báisco" -> "Básico").
+EDITAR       → cambiar algún campo. Extrae SOLO los nuevos valores, NO las palabras de comando.
+  REGLA CRÍTICA para "nombre": extrae ÚNICAMENTE el nombre nuevo del producto.
+  - "edita el nombre del producto por Polo con Cuello" → nombre: "Polo con Cuello"
+  - "cambia el nombre a Jean Slim Tela" → nombre: "Jean Slim Tela"
+  - "el nombre es Blusa Floral" → nombre: "Blusa Floral"
+  NO incluyas palabras como "del producto", "por", "a", "edita", "cambia" en el nombre.
+  CORRIGE errores ortográficos (ej. "Poolo" → "Polo").
 
 Responde SOLO con JSON:
 {{"accion": "TERMINAR|AGREGAR_OTRO|EDITAR|DESCONOCIDO", "cambios": {{"nombre": null, "talla": null, "cantidad": null, "precio_venta": null, "precio_compra": null, "categoria": null}}}}"""
