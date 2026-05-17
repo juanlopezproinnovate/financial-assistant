@@ -90,7 +90,8 @@ async def router_node(state: QuriState) -> QuriState:
         palabras_clave = {
             "agregar", "seguir", "cancelar", "si", "no", "ok", "dale", 
             "ninguno", "ninguna", "otro", "mas", "más", "edita", "cambiar", 
-            "cambia", "corregir", "listo", "queda", "terminar", "ya", "bien"
+            "cambia", "corregir", "listo", "queda", "terminar", "ya", "bien",
+            "guardar", "guarda", "confirmar", "perfecto", "correcto", "va", "sí"
         }
         es_respuesta_menu = (
             len(msg_lower) <= 2 or 

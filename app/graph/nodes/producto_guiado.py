@@ -431,6 +431,24 @@ async def agregar_producto_guiado(
     # Merge: LLM tiene prioridad, regex cubre cuando el LLM falla silenciosamente
     campos = {**campos_rx, **{k: v for k, v in campos_llm.items() if v is not None}}
 
+    # Fallback inteligente para respuestas numéricas cortas
+    msg_strip = mensaje.strip().replace(",", ".")
+    if not any(campos.values()):
+        # Si el LLM y regex fallaron, pero es un número:
+        if re.match(r"^\d+(?:\.\d+)?$", msg_strip):
+            val_float = float(msg_strip)
+            val_int = int(val_float) if val_float.is_integer() else val_float
+            
+            if "talla" not in formulario or not formulario.get("talla"):
+                # Si falta talla y mandó un número, debe ser la talla (ej. 32)
+                campos["talla"] = str(val_int)
+            elif formulario.get("precio_venta") is None:
+                # Si falta precio_venta, es el precio
+                campos["precio_venta"] = val_float
+            elif formulario.get("cantidad") is None:
+                # Si falta cantidad, es el stock
+                campos["cantidad"] = int(val_int)
+
     # Aplicar al formulario
     if campos.get("nombre"):
         formulario["nombre"] = _normalizar_nombre(campos["nombre"])
