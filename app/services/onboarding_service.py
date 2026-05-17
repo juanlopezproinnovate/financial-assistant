@@ -1024,232 +1024,48 @@ class OnboardingService:
         # ══════════════════════════════════════════
         #  PASO 5c → Bucle de carga de productos
         # ══════════════════════════════════════════
+        
         elif estado == "onboarding_5c":
-            sub_paso         = datos_temp.get("inv_sub_paso", SUB_PASO_COMPLETO)
-            producto_actual  = datos_temp.get("inv_producto_actual", {})
-            productos_count  = datos_temp.get("inv_productos_cargados", 0)
-            msg_lower        = mensaje.strip().lower()
+            from app.graph.nodes.producto_guiado import agregar_producto_guiado
 
-            # ── Sub-paso: parsear respuesta del formulario completo ──
-            if sub_paso == SUB_PASO_COMPLETO:
-                # ── Interceptar si cambia de opinión ──
-                if any(w in msg_lower for w in ["después", "despues", "luego", "dashboard", "web", "link", "mas tarde", "más tarde"]):
-                    await self.completar_onboarding(negocio_id)
-                    await self.upsert_sesion(negocio_id, "activo", {})
-                    nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
-                    nombre_prop    = datos_temp.get("nombre_propietario", "")
-                    
-                    es_dashboard = any(w in msg_lower for w in ["dashboard", "web", "link"])
-                    extra_msg = (
-                        "¡Perfecto! 🖥️ Puedes cargar tu inventario completo desde el Dashboard aquí:\n👉 https://quri.app/\n\n"
-                        if es_dashboard else
-                        "¡No hay problema! Puedes ir agregando tus productos conforme vayas vendiendo. 😊\n\n"
-                    )
-                    
-                    return (
-                        extra_msg +
-                        f"¡Todo listo, {nombre_prop}! 🎉\n\n"
-                        f"*{nombre_negocio}* ya está configurado en Quri.\n\n"
-                        "Ahora puedes registrar tus operaciones fácilmente:\n"
-                        "📦 _'Vendí 3 polos a S/25 cada uno'_\n"
-                        "💸 _'Gasté S/200 en mercadería'_\n"
-                        "📊 _'¿Cuánto vendí hoy?'_\n\n"
-                        "¡Estoy aquí para ayudarte! 💪"
-                    )
+            msg_lower       = mensaje.strip().lower()
+            productos_count = datos_temp.get("inv_productos_cargados", 0)
 
-                # ── LLM extrae todos los campos del mensaje libre ──
-                campos = await gemini_service.extraer_producto_inventario(mensaje, producto_actual)
-
-                if campos.get("nombre"):
-                    producto_actual["nombre"] = campos["nombre"]
-                if campos.get("talla"):
-                    producto_actual["talla"] = campos["talla"]
-                if campos.get("precio_venta") is not None:
-                    producto_actual["precio_venta"] = campos["precio_venta"]
-                if campos.get("precio_compra") is not None:
-                    producto_actual["precio_compra"] = campos["precio_compra"]
-                if campos.get("cantidad") is not None:
-                    producto_actual["cantidad"] = campos["cantidad"]
-                if campos.get("precio_compra") is not None:
-                    producto_actual["precio_compra"] = campos["precio_compra"]
-
-                # ── Catch explicit omission of precio_compra ──
-                if "precio_compra" not in producto_actual and producto_actual.get("cantidad") is not None:
-                    if campos.get("precio_compra") is None:
-                        if self._es_omision(mensaje):
-                            producto_actual["precio_compra"] = None
-                        elif mensaje.strip() == "0":
-                            producto_actual["precio_compra"] = 0.0
-
-                datos_temp["inv_producto_actual"] = producto_actual
-
-                # ── Faltan campos obligatorios → pedir solo lo que falta ──
-                if not producto_actual.get("nombre"):
-                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        "Casi listo 😊 Solo me falta saber:\n\n"
-                        "📝 ¿Cómo se llama el producto?\n"
-                        "_(Ej: Polo básico, Jean slim, Blusa floral)_"
-                    )
-                if not producto_actual.get("talla"):
-                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"Bien, *{producto_actual['nombre']}* anotado ✅\n\n"
-                        "📐 ¿Qué *talla* tiene?\n"
-                        "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
-                    )
-                if producto_actual.get("precio_venta") is None:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"*{producto_actual['nombre']}* talla *{producto_actual['talla']}* ✅\n\n"
-                        "💰 ¿Cuál es el *precio de venta* en Soles?\n"
-                        "_(Ej: 35, 49.90, 120)_"
-                    )
-                if producto_actual.get("cantidad") is None:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"*{producto_actual['nombre']}* · S/ {producto_actual['precio_venta']:.2f} ✅\n\n"
-                        "📦 ¿Cuántas *unidades* tienes en stock ahora?\n"
-                        "_(Ej: 10, 25 — escribe 0 si aún no tienes)_"
-                    )
-                if "precio_compra" not in producto_actual:
-                    datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    return (
-                        f"*{producto_actual['nombre']}* · {producto_actual['cantidad']} unidades en stock ✅\n\n"
-                        "💵 ¿Cuál es el *precio de compra* (costo) en Soles?\n"
-                        "_(Opcional — escribe '0' o 'no' si prefieres no ponerlo)_"
-                    )
-
-                # Todo listo, confirmar
-                categorias = await self._leer_categorias_negocio(negocio_id)
-                sugerencia = await gemini_service.sugerir_categoria_producto(
-                    producto_actual["nombre"], categorias
+            # Detectar si quiere salir del inventario
+            if any(w in msg_lower for w in ["después", "despues", "luego", "dashboard", "no", "listo", "terminar"]):
+                await self.completar_onboarding(negocio_id)
+                await self.upsert_sesion(negocio_id, "activo", {})
+                nombre_prop    = datos_temp.get("nombre_propietario", "")
+                nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
+                return (
+                    f"¡Todo listo, {nombre_prop}! 🎉\n\n"
+                    f"*{nombre_negocio}* ya está configurado en Quri.\n\n"
+                    "Ahora puedes registrar tus operaciones:\n"
+                    "📦 _'Vendí 3 polos a S/25 cada uno'_\n"
+                    "💸 _'Gasté S/200 en mercadería'_\n"
+                    "📊 _'¿Cuánto vendí hoy?'_\n\n"
+                    "¡Estoy aquí para ayudarte! 💪"
                 )
-                datos_temp["inv_categoria_sugerida"] = sugerencia.get("categoria")
-                datos_temp["inv_sub_paso"] = SUB_PASO_CONFIRMAR
+
+            resultado = await agregar_producto_guiado(negocio_id, mensaje, datos_temp)
+
+            if resultado["finalizado"]:
+                productos_count += 1
+                datos_temp["inv_productos_cargados"] = productos_count
+                datos_temp["formulario_producto"]    = {}
+
+                # Preguntar si quiere agregar otro
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return _armar_mensaje_confirmacion(producto_actual, sugerencia, categorias)
+                return (
+                    resultado["respuesta"] +
+                    f"\n\nLlevas *{productos_count}* producto(s) cargado(s) 🎉\n"
+                    "¿Quieres agregar otro? Escribe *otro* o *listo* para terminar."
+                )
 
-            # ── Sub-paso: confirmación del resumen + categoría ──
-            elif sub_paso == SUB_PASO_CONFIRMAR:
-                quiere_nueva_cat = msg_lower.startswith("categoría ") or msg_lower.startswith("categoria ")
-
-                if quiere_nueva_cat:
-                    # Extraer nombre de la nueva categoría
-                    nueva_cat = mensaje.strip().split(" ", 1)[1].strip().title()
-                    # Guardarla en BD
-                    await self.guardar_categorias_negocio(
-                        negocio_id,
-                        (await self._leer_categorias_negocio(negocio_id)) + [nueva_cat],
-                    )
-                    datos_temp["inv_categoria_sugerida"] = nueva_cat
-                    producto_actual["categoria"] = nueva_cat
-                    datos_temp["inv_producto_actual"] = producto_actual
-                    # Volver a mostrar confirmación con la nueva categoría
-                    datos_temp["inv_sub_paso"] = SUB_PASO_CONFIRMAR
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                    sugerencia = {"match": True, "categoria": nueva_cat}
-                    return (
-                        f"✅ Categoría *{nueva_cat}* creada.\n\n"
-                        + _armar_mensaje_confirmacion(producto_actual, sugerencia, [])
-                    )
-
-                producto_para_ia = producto_actual.copy()
-                producto_para_ia["categoria"] = datos_temp.get("inv_categoria_sugerida")
-
-                interpretacion = await gemini_service.interpretar_accion_inventario(mensaje, producto_para_ia)
-                accion = interpretacion.get("accion", "DESCONOCIDO")
-
-                if accion == "EDITAR":
-                    cambios = interpretacion.get("cambios", {})
-                    # Si no extrajo ningún cambio específico, preguntar qué quiere cambiar
-                    if not any(v is not None for v in cambios.values()):
-                        return "Dime, ¿qué dato quieres cambiar? (Por ejemplo: 'cambia el precio a 20' o 'edita la categoría a Polos')"
-
-                    # Aplicar cambios
-                    if cambios.get("nombre"): producto_actual["nombre"] = cambios["nombre"]
-                    if cambios.get("talla") is not None: producto_actual["talla"] = cambios["talla"] if cambios["talla"] else ""
-                    if cambios.get("cantidad") is not None: producto_actual["cantidad"] = cambios["cantidad"]
-                    if cambios.get("precio_venta") is not None: producto_actual["precio_venta"] = cambios["precio_venta"]
-                    if cambios.get("precio_compra") is not None: producto_actual["precio_compra"] = cambios["precio_compra"]
-                    
-                    if cambios.get("categoria"):
-                        nueva_cat = cambios["categoria"]
-                        await self.guardar_categorias_negocio(
-                            negocio_id,
-                            (await self._leer_categorias_negocio(negocio_id)) + [nueva_cat],
-                        )
-                        datos_temp["inv_categoria_sugerida"] = nueva_cat
-
-                    datos_temp["inv_producto_actual"] = producto_actual
-                    await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-
-                    sugerencia = {"match": True, "categoria": datos_temp["inv_categoria_sugerida"]} if datos_temp.get("inv_categoria_sugerida") else {"match": False}
-                    return (
-                        f"✅ ¡Listo! Datos actualizados.\n\n"
-                        + _armar_mensaje_confirmacion(producto_actual, sugerencia, [])
-                    )
-                
-                elif accion in ["TERMINAR", "AGREGAR_OTRO"]:
-                    categoria_nombre = datos_temp.get("inv_categoria_sugerida")
-                    # Insertar con la categoría resuelta
-                    try:
-                        await self.insertar_producto_con_stock(
-                            negocio_id=negocio_id,
-                            nombre=producto_actual["nombre"],
-                            talla=producto_actual["talla"],
-                            precio_venta=producto_actual["precio_venta"],
-                            cantidad=producto_actual["cantidad"],
-                            precio_costo=producto_actual.get("precio_compra"),
-                            categoria_nombre=categoria_nombre,
-                        )
-                        productos_count += 1
-                        datos_temp["inv_productos_cargados"] = productos_count
-                    except Exception as e:
-                        logger.error(f"[Onboarding] Error al guardar producto: {e}")
-                        return "⚠️ Hubo un problema al guardar. Escribe el nombre del producto para intentar de nuevo."
-
-                    if accion == "AGREGAR_OTRO":
-                        datos_temp["inv_producto_actual"] = {}
-                        datos_temp["inv_sub_paso"] = SUB_PASO_COMPLETO
-                        await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                        return (
-                            f"✅ *{producto_actual['nombre']}* guardado.\n\n"
-                            + self._mensaje_plantilla_producto(productos_count + 1)
-                        )
-                    else: # TERMINAR
-                        await self.completar_onboarding(negocio_id)
-                        await self.upsert_sesion(negocio_id, "activo", {})
-
-                        nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
-                        nombre_prop    = datos_temp.get("nombre_propietario", "")
-                        return (
-                            f"✅ *{producto_actual['nombre']}* guardado.\n\n"
-                            f"¡Todo listo, {nombre_prop}! 🎉\n\n"
-                            f"*{nombre_negocio}* ya está configurado en Quri.\n\n"
-                            "Ahora puedes registrar tus operaciones fácilmente:\n"
-                            "📦 _'Vendí 3 polos a S/25 cada uno'_\n"
-                            "💸 _'Gasté S/200 en mercadería'_\n"
-                            "📊 _'¿Cuánto vendí hoy?'_\n\n"
-                            "¡Estoy aquí para ayudarte! 💪"
-                        )
-                
-                else: # DESCONOCIDO
-                    return (
-                        "No entendí bien 😅 ¿Todo está correcto? Puedes decirme 'sí', 'quiero agregar otro', o 'corregir algo'."
-                    )
-
-            # ── Sub-paso desconocido: reiniciar ──
-            else:
-                datos_temp["inv_sub_paso"] = SUB_PASO_NOMBRE
-                datos_temp["inv_producto_actual"] = {}
-                await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return self._mensaje_plantilla_producto(datos_temp.get("inv_productos_cargados", 0) + 1)
+            # Flujo intermedio — persistir y seguir
+            datos_temp.update(resultado["datos"])
+            await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
+            return resultado["respuesta"]
 
         # ══════════════════════════════════════════
         #  PASO 6 → Capturar horario de cierre

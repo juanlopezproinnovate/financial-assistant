@@ -24,6 +24,8 @@ from app.services.gemini_service import gemini_service
 from app.services.stock_service import stock_service
 from app.services.onboarding_service import onboarding_service
 from app.database import get_pool
+from app.graph.nodes.producto_guiado import agregar_producto_guiado
+
 
 logger = logging.getLogger(__name__)
 
@@ -1088,184 +1090,12 @@ async def _handle_decision_producto_nuevo(state, datos, negocio_id, mensaje):
 
 
 async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
-    """
-    Flujo guiado para agregar un producto nuevo desde el chat activo
-    (fuera del onboarding). Recolecta campos uno a uno usando el mismo
-    extractor LLM que usa el onboarding, y persiste el sub_estado en
-    cada turno vía datos_pendientes (que graph.py guarda en la BD).
-    """
-
-    logger.info(f"[AgregarProducto] datos recibidos: {datos}")
-    logger.info(f"[AgregarProducto] formulario: {datos.get('formulario_producto')}")
-    
-    formulario = datos.get("formulario_producto", {})
-    msg_lower  = mensaje.strip().lower()
-
-    # ── Cancelar explícito ──
-    if msg_lower in ("cancelar", "salir"):
-        return {
-            **state,
-            "respuesta": "Cancelado. ¿En qué más te ayudo? 😊",
-            "sub_estado": "",
-            "datos_pendientes": {},
-        }
-
-    if datos.get("inv_guardado"):
-        return {
-            **state,
-            "respuesta": "¿En qué más te ayudo? 😊",
-            "sub_estado": "",
-            "datos_pendientes": {},
-        }
-
-    # ── Extraer lo que venga en el mensaje con el LLM ──
-    campos = await gemini_service.extraer_producto_inventario(mensaje, formulario)
-
-    if campos.get("nombre"):
-        formulario["nombre"] = campos["nombre"]
-    if campos.get("talla"):
-        formulario["talla"] = campos["talla"]
-    if campos.get("precio_venta") is not None:
-        formulario["precio_venta"] = campos["precio_venta"]
-    if campos.get("precio_compra") is not None:
-        formulario["precio_compra"] = campos["precio_compra"]
-    if campos.get("cantidad") is not None:
-        formulario["cantidad"] = campos["cantidad"]
-
-    # Omisión explícita de precio_compra
-    if msg_lower in ("no", "omitir", "saltar", "-", "n/a", "nada", "0"):
-        if (formulario.get("nombre") and formulario.get("talla")
-                and formulario.get("precio_venta") is not None
-                and formulario.get("cantidad") is not None):
-            formulario["precio_compra"] = None  # confirmado como omitido
-
-    def _actualizar_datos():
-        return {
-            **datos,
-            "formulario_producto": formulario,
-            "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
-        }
-
-    # ── Pedir campos faltantes uno a uno ──
-    if not formulario.get("nombre"):
-        return {
-            **state,
-            "respuesta": (
-                "¿Cómo se llama el producto?\n"
-                "_(Ej: Polo básico, Jean slim, Blusa floral)_"
-            ),
-            "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
-            "datos_pendientes": _actualizar_datos(),
-        }
-
-    if not formulario.get("talla"):
-        return {
-            **state,
-            "respuesta": (
-                f"*{formulario['nombre']}* ✅\n\n"
-                "📐 ¿Qué talla tiene?\n"
-                "_(Ej: S, M, L, XL, 28, 30, Talla única)_"
-            ),
-            "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
-            "datos_pendientes": _actualizar_datos(),
-        }
-
-    if formulario.get("precio_venta") is None:
-        return {
-            **state,
-            "respuesta": (
-                f"*{formulario['nombre']}* talla *{formulario['talla']}* ✅\n\n"
-                "💰 ¿Cuál es el precio de venta en Soles?\n"
-                "_(Ej: 35, 49.90, 120)_"
-            ),
-            "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
-            "datos_pendientes": _actualizar_datos(),
-        }
-
-    if formulario.get("cantidad") is None:
-        return {
-            **state,
-            "respuesta": (
-                f"*{formulario['nombre']}* · S/ {formulario['precio_venta']:.2f} ✅\n\n"
-                "📦 ¿Cuántas unidades tienes en stock?\n"
-                "_(Ej: 10, 25 — escribe 0 si aún no tienes)_"
-            ),
-            "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
-            "datos_pendientes": _actualizar_datos(),
-        }
-
-    # precio_compra: None = no preguntado aún, valor real o False = ya respondido
-    if "precio_compra" not in formulario:
-        formulario["precio_compra"] = "pendiente"  # marca para el próximo turno
-        return {
-            **state,
-            "respuesta": (
-                f"*{formulario['nombre']}* · {formulario['cantidad']} uds ✅\n\n"
-                "💵 ¿Cuál es el precio de compra (costo) en Soles?\n"
-                "_(Opcional — escribe 'no' para omitirlo)_"
-            ),
-            "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
-            "datos_pendientes": _actualizar_datos(),
-        }
-
-    # ── Todos los campos listos → guardar ──
-    precio_compra_final = formulario.get("precio_compra")
-    if precio_compra_final == "pendiente":
-        precio_compra_final = None  # no respondió, omitimos
-
-    ya_existe = await _producto_ya_existe(
-        negocio_id,
-        formulario["nombre"],
-        formulario.get("talla"),
-    )
-    if ya_existe:
-        talla_txt = f" Talla {formulario['talla']}" if formulario.get("talla") else ""
-        return {
-            **state,
-            "respuesta": (
-                f"⚠️ *{formulario['nombre']}{talla_txt}* ya está en tu catálogo.\n\n"
-                f"¿Quieres registrar otro producto diferente o en qué más te ayudo? 😊"
-            ),
-            "sub_estado": "",
-            "datos_pendientes": {},
-        }
-
-    try:
-        await stock_service.crear_producto(
-            negocio_id       = negocio_id,
-            nombre           = formulario["nombre"],
-            talla            = formulario.get("talla"),
-            precio_venta     = formulario["precio_venta"],
-            precio_costo     = precio_compra_final,
-            cantidad_inicial = formulario["cantidad"],
-        )
-    except Exception as e:
-        logger.error(f"[agregar_producto_guiado] Error al guardar: {e}")
-        return {
-            **state,
-            "respuesta": "⚠️ Hubo un problema al guardar. Intenta de nuevo o escribe 'cancelar'.",
-            "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
-            "datos_pendientes": datos,
-        }
-
-    nombre_final = formulario["nombre"] + (
-        f" Talla {formulario['talla']}" if formulario.get("talla") else ""
-    )
-    respuesta = (
-        f"✅ *{nombre_final}* agregado a tu catálogo 📦\n\n"
-        f"📐 Talla: {formulario.get('talla', '—')}\n"
-        f"💰 Precio venta: S/ {formulario['precio_venta']:.2f}\n"
-        f"📦 Stock inicial: {formulario['cantidad']} unidades\n"
-    )
-    if precio_compra_final:
-        respuesta += f"💵 Precio compra: S/ {precio_compra_final:.2f}\n"
-    respuesta += "\n¿Quieres agregar otro producto o en qué más te ayudo? 😊"
-
+    resultado = await agregar_producto_guiado(negocio_id, mensaje, datos)
     return {
         **state,
-        "respuesta": respuesta,
-        "sub_estado": "",
-        "datos_pendientes": {},
+        "respuesta": resultado["respuesta"],
+        "sub_estado": "" if resultado["finalizado"] else "AGREGAR_PRODUCTO_GUIADO",
+        "datos_pendientes": resultado["datos"],
     }
 
 async def _producto_ya_existe(negocio_id: str, nombre: str, talla: str) -> bool:
