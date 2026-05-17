@@ -801,17 +801,31 @@ class OnboardingService:
                 "2. Ropa de Varón\n"
                 "3. Ropa de Niños\n"
                 "4. Ropa Deportiva\n"
-                "5. ¡Otro! Cuéntame qué tipo de ropa es ✨"
+                "5. Ropa en General (Dama, Varón, Niños)\n"   # ← AGREGAR
+                "6. ¡Otro! Cuéntame qué tipo de ropa es ✨"    # ← era 5, ahora 6
             )
 
         # ══════════════════════════════════════════
         #  PASO 4 → Capturar tipo de ropa
         # ══════════════════════════════════════════
         elif estado == "onboarding_4":
-            tipo_ropa = await gemini_service.extraer_dato(
-                campo="tipo de ropa o categoría de ropa",
-                mensaje=mensaje,
-            )
+            msg_strip = mensaje.strip()
+            mapa_opciones = {
+                "1": "Ropa de Dama",
+                "2": "Ropa de Varón",
+                "3": "Ropa de Niños",
+                "4": "Ropa Deportiva",
+                "5": "Ropa en General",
+            }
+            if msg_strip in mapa_opciones:
+                tipo_ropa = mapa_opciones[msg_strip]
+            else:
+                tipo_ropa = await gemini_service.extraer_dato(
+                    campo="tipo de ropa o categoría de ropa",
+                    mensaje=mensaje,
+                )
+                tipo_ropa = tipo_ropa[:50]
+
             datos_temp["rubro"] = tipo_ropa
             await self.actualizar_negocio(negocio_id, rubro=tipo_ropa)
 
@@ -827,7 +841,6 @@ class OnboardingService:
                 f"{lista}\n\n"
                 "¿Las dejamos así o quieres quitar/agregar algo?"
             )
-
         # ══════════════════════════════════════════
         #  PASO 5 → Ajustar categorías hasta "listo"
         # ══════════════════════════════════════════
