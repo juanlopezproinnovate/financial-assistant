@@ -396,10 +396,11 @@ class GeminiService:
             f'El comerciante dijo que vendió: "{nombre_extraido}"\n\n'
             f"Estos son los productos registrados en su catálogo:\n{lista_txt}\n\n"
             f"¿Alguno de estos productos es claramente el mismo que mencionó el comerciante?\n"
+            f"IMPORTANTE: Si el comerciante especifica una talla y el producto en catálogo tiene una talla distinta, NO es un match exacto. En ese caso usa 'parcial' o 'ninguno'.\n"
             f"Responde SOLO con JSON:\n"
             f'{{"match": "exacto"|"parcial"|"ninguno", "indice": 1..N|null}}\n'
-            f"- exacto: hay UNO que claramente es el mismo producto.\n"
-            f"- parcial: hay varios que podrían serlo.\n"
+            f"- exacto: hay UNO que claramente es el mismo producto y la talla coincide.\n"
+            f"- parcial: hay similitud pero la talla es distinta, o hay varios posibles.\n"
             f"- ninguno: ninguno coincide.\n"
             f"indice: número del producto si match=exacto, null en cualquier otro caso."
         )

@@ -84,7 +84,13 @@ async def router_node(state: QuriState) -> QuriState:
         intent_detectado = result.get("intent", "DESCONOCIDO")
 
         # Si el intent es un interruptor claro → abandonar sub_estado
-        if intent_detectado in INTENTS_INTERRUPTORES:
+        es_respuesta_corta = len(mensaje.strip()) <= 2 or mensaje.strip().lower() in [
+            "agregar", "seguir", "cancelar", "si", "no", "ok", "dale", "ninguno", 
+            "ninguna", "otro", "mas", "más", "edita", "cambiar", "corregir", "listo", 
+            "queda", "terminar", "ya", "bien"
+        ]
+
+        if intent_detectado in INTENTS_INTERRUPTORES and not es_respuesta_corta:
             logger.info(
                 f"[Router] {telefono} | sub_estado={sub_estado} "
                 f"INTERRUMPIDO por intent={intent_detectado}"
