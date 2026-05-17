@@ -63,6 +63,13 @@ async def _handle_inbound(body: dict) -> None:
     if msg_type == "text":
         text = msg.get("text", {}).get("body", "").strip()
         logger.info(f"   Texto: {text!r}")
+        contexto_referencia = msg.get("context", {})
+        quoted_id   = contexto_referencia.get("id", "")
+        quoted_body = contexto_referencia.get("body", "")  # algunos providers lo incluyen
+        
+        if quoted_body:
+            text = f"[Respondiendo a: '{quoted_body}']\n{text}"
+        
         await _process_text(from_number, text, es_audio=False)
 
     elif msg_type == "audio":

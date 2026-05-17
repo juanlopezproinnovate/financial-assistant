@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 
-MODELO_NLP = "llama-3.1-8b-instant"
+MODELO_NLP = "llama-3.3-70b-versatile"
 
 SYSTEM_PROMPT = """
 Eres Quri, el asistente de negocios por WhatsApp para comerciantes de ropa de Tacna, Perú.
@@ -78,29 +78,41 @@ Frases: vendí, vendiste, vendimos, salió una, me llevaron, acabo de vender
 ]
 
 REGLAS DE PRECIO PARA VENTA:
-- Si dice "vendí 2 polos a 70 soles" sin "cada uno" → total:70, precio_unitario:35
+- El precio mencionado SIN "cada uno" / "c/u" / "por unidad" / "uno" 
+  es SIEMPRE el TOTAL de esa línea, no el unitario.
+- precio_unitario = total / cantidad
+- Si dice "vendí 2 polos a 70 soles" → total:70, precio_unitario:35
 - Si dice "vendí 2 polos a 35 cada uno" → precio_unitario:35, total:70
+- Si dice "vendí 2 polos a 35 c/u" → precio_unitario:35, total:70
+- Si dice "vendí 2 polos a 35 por unidad" → precio_unitario:35, total:70
+- Si dice "vendí 1 polo a 35" → total:35, precio_unitario:35
 - Si falta precio o cantidad de algún item → pídelos en "respuesta"
 
-EJEMPLOS VENTA:
-"vendí 1 polo talla M a 90 soles"
-→ items:[{producto:"polo talla M", cantidad:1, precio_unitario:90, total:90, moneda:"PEN"}]
+SEÑALES DE PRECIO UNITARIO (precio se multiplica por cantidad):
+"cada uno", "c/u", "por unidad", "uno", "cada", "x unidad"
 
-"vendí 2 polos a 70 y 3 blusas a 90 soles cada una"
+SEÑALES DE PRECIO TOTAL (precio se divide entre cantidad):
+ninguna señal especial, precio mencionado solo → siempre es total
+
+EJEMPLOS VENTA:
+"vendí 2 polos a 70 soles"
+→ items:[{producto:"polo", cantidad:2, precio_unitario:35, total:70, moneda:"PEN"}]
+
+"vendí 2 polos a 35 cada uno"
+→ items:[{producto:"polo", cantidad:2, precio_unitario:35, total:70, moneda:"PEN"}]
+
+"vendí 1 jean slim a 120"
+→ items:[{producto:"jean slim", cantidad:1, precio_unitario:120, total:120, moneda:"PEN"}]
+
+"vendí 2 polos a 70 y 3 blusas a 90 soles"
 → items:[
     {producto:"polo", cantidad:2, precio_unitario:35, total:70, moneda:"PEN"},
-    {producto:"blusa", cantidad:3, precio_unitario:90, total:270, moneda:"PEN"}
+    {producto:"blusa", cantidad:3, precio_unitario:30, total:90, moneda:"PEN"}
   ]
 
-"vendí un jean slim a 120 y una casaca a 200"
+"vendí 2 polos a 35 cada uno, 1 blusa a 50 y 4 shorts a 25 c/u"
 → items:[
-    {producto:"jean slim", cantidad:1, precio_unitario:120, total:120, moneda:"PEN"},
-    {producto:"casaca", cantidad:1, precio_unitario:200, total:200, moneda:"PEN"}
-  ]
-
-"vendí 2 polos a 35, 1 blusa a 50 y 4 shorts a 25 cada uno"
-→ items:[
-    {producto:"polo", cantidad:2, precio_unitario:17.5, total:35, moneda:"PEN"},
+    {producto:"polo", cantidad:2, precio_unitario:35, total:70, moneda:"PEN"},
     {producto:"blusa", cantidad:1, precio_unitario:50, total:50, moneda:"PEN"},
     {producto:"short", cantidad:4, precio_unitario:25, total:100, moneda:"PEN"}
   ]
@@ -579,6 +591,17 @@ No incluyas texto adicional ni markdown."""
             f"PEN      → solo acepta soles peruanos\n"
             f"CLP      → solo acepta pesos chilenos\n"
             f"PEN,CLP  → acepta ambas monedas\n\n"
+            f"Ejemplos:\n"
+            f"'1' → PEN\n"
+            f"'solo soles' → PEN\n"
+            f"'soles noma' → PEN\n"
+            f"'soles nomás' → PEN\n"
+            f"'No, solo soles' → PEN\n"
+            f"'2' → CLP\n"
+            f"'solo pesos' → CLP\n"
+            f"'3' → PEN,CLP\n"
+            f"'ambas' → PEN,CLP\n"
+            f"'los dos' → PEN,CLP\n\n"
             f"Responde solo el código, sin explicaciones."
         )
         try:
@@ -603,6 +626,10 @@ No incluyas texto adicional ni markdown."""
             tiene_pen   = any(w in msg_lower for w in ["sol", "soles", "pen", "peruano", "1", "uno", "primero"])
             tiene_clp   = any(w in msg_lower for w in ["peso", "pesos", "clp", "chileno", "2", "dos", "segundo"])
             tiene_ambas = any(w in msg_lower for w in ["ambas", "los dos", "todo", "3", "tres", "ambos"])
+            tiene_negacion = any(w in msg_lower for w in ["no,", "solo soles", "noma", "nomás", "nomas"])
+
+            if tiene_negacion and tiene_pen:
+                return "PEN"
             if tiene_ambas or (tiene_pen and tiene_clp):
                 return "PEN,CLP"
             if tiene_clp:

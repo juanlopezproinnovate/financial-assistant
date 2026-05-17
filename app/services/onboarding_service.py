@@ -105,6 +105,56 @@ class OnboardingService:
             )
         return dict(row) if row else None
 
+    async def _extraer_y_validar_horario(self, mensaje: str) -> str | None:
+        """
+        Extrae hora de cierre del mensaje.
+        Retorna string "HH:MM" o None si no detecta un horario válido.
+        """
+        import re
+        msg = mensaje.strip().lower()
+        
+        # Formato HH:MM o H:MM
+        m = re.search(r'\b(\d{1,2}):(\d{2})\b', msg)
+        if m:
+            h, mi = int(m.group(1)), int(m.group(2))
+            if 0 <= h <= 23 and 0 <= mi <= 59:
+                return f"{h:02d}:{mi:02d}"
+        
+        # Formato "8pm", "8 pm", "20h"
+        m = re.search(r'\b(\d{1,2})\s*(pm|am|h)\b', msg)
+        if m:
+            h = int(m.group(1))
+            sufijo = m.group(2)
+            if sufijo == "pm" and h != 12:
+                h += 12
+            elif sufijo == "am" and h == 12:
+                h = 0
+            if 0 <= h <= 23:
+                return f"{h:02d}:00"
+        
+        # Texto natural: "8 de la noche", "9 de la tarde"
+        m = re.search(r'\b(\d{1,2})\s+de\s+la\s+(noche|tarde|mañana|madrugada)\b', msg)
+        if m:
+            h = int(m.group(1))
+            periodo = m.group(2)
+            if periodo in ("noche", "tarde") and h != 12:
+                h += 12
+            elif periodo == "mañana" and h == 12:
+                h = 0
+            if 0 <= h <= 23:
+                return f"{h:02d}:00"
+        
+        # Solo número entre 1 y 23 → asumir PM si es <= 12
+        m = re.search(r'^\s*(\d{1,2})\s*$', msg)
+        if m:
+            h = int(m.group(1))
+            if 1 <= h <= 12:
+                h += 12  # asumir PM
+            if 0 <= h <= 23:
+                return f"{h:02d}:00"
+        
+        return None  # no es un horario válido → pedir de nuevo
+
     async def get_sesion(self, telefono: str) -> dict | None:
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -709,10 +759,38 @@ class OnboardingService:
         #  PASO 3b → Capturar horario de cierre
         # ══════════════════════════════════════════
         elif estado == "onboarding_3b":
-            horario = await gemini_service.extraer_dato(
-                campo="hora de cierre en formato HH:MM",
-                mensaje=mensaje,
-            )
+            msg_lower = mensaje.strip().lower()
+            
+            # ── NUEVO: detectar si quiere corregir la moneda ──
+            quiere_corregir_moneda = any(w in msg_lower for w in [
+                "no,", "solo soles", "soles noma", "soles nomás", "me equivoqué",
+                "equivoqué", "error", "solo pen", "corrección", "corregir moneda"
+            ])
+            if quiere_corregir_moneda or (
+                any(w in msg_lower for w in ["solo soles", "soles", "pen"]) and
+                "clp" not in msg_lower and datos_temp.get("monedas_aceptadas") == "PEN,CLP"
+            ):
+                monedas = await gemini_service.extraer_monedas(mensaje=mensaje)
+                datos_temp["monedas_aceptadas"] = monedas
+                await self.actualizar_negocio(negocio_id, monedas_aceptadas=monedas)
+                monedas_texto = {
+                    "PEN": "solo Soles 🇵🇪",
+                    "CLP": "solo Pesos chilenos 🇨🇱",
+                    "PEN,CLP": "Soles y Pesos chilenos 🇵🇪🇨🇱",
+                }.get(monedas, monedas)
+                return (
+                    f"Corregido, aceptas *{monedas_texto}* 💰\n\n"
+                    "¿A qué hora sueles *cerrar tu tienda*? 🕐\n"
+                    "_(Ej: 8pm, 20:00, 9 de la noche)_"
+                )
+            horario = await self._extraer_y_validar_horario(mensaje)
+            
+            if not horario:
+                return (
+                    "No entendí el horario 😅 ¿A qué hora cierras?\n"
+                    "_(Ej: *8pm*, *20:00*, *9 de la noche*)_"
+                )
+            
             datos_temp["horario_cierre"] = horario
             await self.actualizar_negocio(negocio_id, horario_cierre=horario)
             await self.upsert_sesion(negocio_id, "onboarding_4", datos_temp)
