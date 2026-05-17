@@ -1,67 +1,228 @@
--- ============================================================
--- SCHEMA INICIAL — Chatbot WhatsApp para Comerciantes Tacna
--- Ejecutar en Supabase → SQL Editor
--- ============================================================
+## Table `categorias`
 
--- 1. NEGOCIOS — cada comerciante registrado en el bot
-CREATE TABLE IF NOT EXISTS negocios (
-    id          SERIAL PRIMARY KEY,
-    whatsapp    VARCHAR(20)  NOT NULL UNIQUE,   -- número en formato E.164, ej: 51912345678
-    nombre      VARCHAR(120) NOT NULL,
-    rubro       VARCHAR(80),                    -- ropa, calzado, accesorios, etc.
-    activo      BOOLEAN      NOT NULL DEFAULT TRUE,
-    creado_en   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
+### Columns
 
--- 2. CATEGORÍAS — categorías de productos del negocio
-CREATE TABLE IF NOT EXISTS categorias (
-    id          SERIAL PRIMARY KEY,
-    negocio_id  INT          NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
-    nombre      VARCHAR(80)  NOT NULL,
-    creado_en   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `negocio_id` | `uuid` |  |
+| `nombre` | `varchar` |  |
+| `tipo` | `varchar` |  |
+| `color` | `varchar` |  Nullable |
+| `activa` | `bool` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
 
--- 3. TRANSACCIONES — ventas e ingresos/egresos registrados por voz o texto
-CREATE TABLE IF NOT EXISTS transacciones (
-    id           SERIAL PRIMARY KEY,
-    negocio_id   INT             NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
-    categoria_id INT             REFERENCES categorias(id) ON DELETE SET NULL,
-    tipo         VARCHAR(10)     NOT NULL CHECK (tipo IN ('ingreso', 'egreso')),
-    monto        NUMERIC(10, 2)  NOT NULL,
-    descripcion  TEXT,
-    fecha        DATE            NOT NULL DEFAULT CURRENT_DATE,
-    creado_en    TIMESTAMPTZ     NOT NULL DEFAULT NOW()
-);
+## Table `categorias_plantilla`
 
--- 4. RECORDATORIOS — alertas programadas (pagos, pedidos, etc.)
-CREATE TABLE IF NOT EXISTS recordatorios (
-    id          SERIAL PRIMARY KEY,
-    negocio_id  INT          NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
-    mensaje     TEXT         NOT NULL,
-    fecha_hora  TIMESTAMPTZ  NOT NULL,
-    enviado     BOOLEAN      NOT NULL DEFAULT FALSE,
-    creado_en   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
+Caché de categorías de inventario agrupadas por tipo de ropa. Generadas por IA la primera vez y reutilizadas para ahorrar tokens.
 
--- 5. SESIONES — estado conversacional de cada usuario
-CREATE TABLE IF NOT EXISTS sesiones (
-    id          SERIAL PRIMARY KEY,
-    negocio_id  INT          NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
-    estado      VARCHAR(40)  NOT NULL DEFAULT 'inicio',  -- inicio, registrando, menu, etc.
-    contexto    JSONB        NOT NULL DEFAULT '{}',      -- datos temporales del flujo
-    actualizado TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
+### Columns
 
--- 6. MÉTRICAS — eventos para análisis del MVP
-CREATE TABLE IF NOT EXISTS metricas (
-    id          SERIAL PRIMARY KEY,
-    negocio_id  INT          REFERENCES negocios(id) ON DELETE SET NULL,
-    evento      VARCHAR(60)  NOT NULL,   -- mensaje_recibido, voz_procesada, transaccion_creada, etc.
-    detalle     JSONB        NOT NULL DEFAULT '{}',
-    creado_en   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `tipo_ropa` | `varchar` |  Unique |
+| `categorias` | `jsonb` |  |
+| `generado_por_ia` | `bool` |  Nullable |
+| `veces_usado` | `int4` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+| `updated_at` | `timestamptz` |  Nullable |
 
--- Índices útiles para consultas frecuentes
-CREATE INDEX IF NOT EXISTS idx_transacciones_negocio_fecha ON transacciones(negocio_id, fecha DESC);
-CREATE INDEX IF NOT EXISTS idx_recordatorios_pendientes    ON recordatorios(fecha_hora) WHERE enviado = FALSE;
-CREATE INDEX IF NOT EXISTS idx_metricas_evento             ON metricas(evento, creado_en DESC);
+## Table `inventario`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `negocio_id` | `uuid` |  |
+| `producto` | `varchar` |  |
+| `categoria` | `varchar` |  Nullable |
+| `cantidad_actual` | `int4` |  Nullable |
+| `cantidad_minima` | `int4` |  Nullable |
+| `precio_costo` | `numeric` |  Nullable |
+| `precio_costo_moneda` | `varchar` |  Nullable |
+| `precio_venta_pen` | `numeric` |  Nullable |
+| `unidad` | `varchar` |  Nullable |
+| `activo` | `bool` |  Nullable |
+| `ultima_actualizacion` | `timestamptz` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+
+## Table `metricas`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `negocio_id` | `uuid` |  |
+| `fecha` | `date` |  |
+| `mensajes_recibidos` | `int4` |  Nullable |
+| `mensajes_enviados` | `int4` |  Nullable |
+| `ventas_registradas` | `int4` |  Nullable |
+| `gastos_registrados` | `int4` |  Nullable |
+| `consultas_inventario` | `int4` |  Nullable |
+| `reportes_generados` | `int4` |  Nullable |
+| `audios_transcritos` | `int4` |  Nullable |
+| `ventas_a_chilenos` | `int4` |  Nullable |
+| `ventas_a_bolivianos` | `int4` |  Nullable |
+| `ventas_en_clp` | `numeric` |  Nullable |
+| `ventas_en_bob` | `numeric` |  Nullable |
+| `ventas_en_usd` | `numeric` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+
+## Table `negocios`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `whatsapp_numero` | `varchar` |  Unique |
+| `nombre_negocio` | `varchar` |  Nullable |
+| `nombre_propietario` | `varchar` |  Nullable |
+| `rubro` | `varchar` |  Nullable |
+| `ciudad` | `varchar` |  Nullable |
+| `estado` | `varchar` |  Nullable |
+| `onboarding_completo` | `bool` |  Nullable |
+| `idioma_preferido` | `varchar` |  Nullable |
+| `zona_horaria` | `varchar` |  Nullable |
+| `atiende_turistas_chilenos` | `bool` |  Nullable |
+| `atiende_clientes_bolivianos` | `bool` |  Nullable |
+| `proveedores_zona_franca` | `bool` |  Nullable |
+| `proveedores_bolivia` | `bool` |  Nullable |
+| `monedas_aceptadas` | `varchar` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+| `updated_at` | `timestamptz` |  Nullable |
+| `horario_cierre` | `varchar` |  Nullable |
+
+## Table `productos`
+
+Catálogo de productos por negocio. Separado del stock para respetar responsabilidades.
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `negocio_id` | `uuid` |  |
+| `categoria_id` | `uuid` |  Nullable |
+| `nombre` | `varchar` |  |
+| `nombre_variantes` | `_varchar` |  Nullable |
+| `precio_costo` | `numeric` |  Nullable |
+| `precio_costo_moneda` | `varchar` |  Nullable |
+| `precio_venta_pen` | `numeric` |  Nullable |
+| `unidad` | `varchar` |  Nullable |
+| `activo` | `bool` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+| `updated_at` | `timestamptz` |  Nullable |
+| `talla` | `text` |  Nullable |
+
+## Table `recordatorios`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `negocio_id` | `uuid` |  |
+| `tipo` | `varchar` |  |
+| `mensaje` | `text` |  |
+| `frecuencia` | `varchar` |  Nullable |
+| `hora_envio` | `time` |  Nullable |
+| `dia_semana` | `int4` |  Nullable |
+| `dia_mes` | `int4` |  Nullable |
+| `fecha_especifica` | `date` |  Nullable |
+| `activo` | `bool` |  Nullable |
+| `ultimo_envio_at` | `timestamptz` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+
+## Table `sesiones`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `negocio_id` | `uuid` |  Unique |
+| `estado_conversacion` | `varchar` |  Nullable |
+| `datos_temporales` | `jsonb` |  Nullable |
+| `ultimo_mensaje_at` | `timestamptz` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+
+## Table `stock`
+
+Estado actual de stock por producto. One-to-one con productos. Solo se actualiza, nunca se borra.
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `producto_id` | `uuid` |  Unique |
+| `cantidad_actual` | `int4` |  |
+| `cantidad_minima` | `int4` |  |
+| `ultima_actualizacion` | `timestamptz` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+
+## Table `stock_movimientos`
+
+Historial inmutable de movimientos de stock. Nunca se elimina. Cada fila es una entrada o salida con snapshot de cantidad.
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `producto_id` | `uuid` |  |
+| `negocio_id` | `uuid` |  |
+| `tipo` | `varchar` |  |
+| `cantidad` | `int4` |  |
+| `cantidad_antes` | `int4` |  |
+| `cantidad_despues` | `int4` |  |
+| `motivo` | `varchar` |  Nullable |
+| `transaccion_id` | `uuid` |  Nullable |
+| `notas` | `text` |  Nullable |
+| `fecha` | `date` |  |
+| `hora` | `time` |  |
+| `created_at` | `timestamptz` |  Nullable |
+
+## Table `tipos_cambio`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `fecha` | `date` |  |
+| `moneda_origen` | `varchar` |  |
+| `moneda_destino` | `varchar` |  |
+| `tasa` | `numeric` |  |
+| `fuente` | `varchar` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+
+## Table `transacciones`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `negocio_id` | `uuid` |  |
+| `tipo` | `varchar` |  |
+| `monto` | `numeric` |  |
+| `moneda` | `varchar` |  Nullable |
+| `tasa_cambio_usada` | `numeric` |  Nullable |
+| `monto_pen` | `numeric` |  Nullable |
+| `categoria_id` | `uuid` |  Nullable |
+| `descripcion` | `text` |  Nullable |
+| `origen_cliente` | `varchar` |  Nullable |
+| `metodo_pago` | `varchar` |  Nullable |
+| `fecha` | `date` |  |
+| `hora` | `time` |  Nullable |
+| `notas` | `text` |  Nullable |
+| `origen_registro` | `varchar` |  Nullable |
+| `created_at` | `timestamptz` |  Nullable |
+| `cantidad` | `int4` |  Nullable |
+| `producto_id` | `uuid` |  Nullable |
+

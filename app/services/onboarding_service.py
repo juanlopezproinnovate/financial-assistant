@@ -987,12 +987,21 @@ class OnboardingService:
             ])
 
             if cargar_ahora and not cargar_despues:
-                # Iniciar sub-flujo de carga de productos
-                datos_temp["inv_sub_paso"]         = SUB_PASO_COMPLETO
-                datos_temp["inv_producto_actual"]  = {}
                 datos_temp["inv_productos_cargados"] = datos_temp.get("inv_productos_cargados", 0)
+                datos_temp["formulario_producto"]    = {}
+                datos_temp["inv_confirmado"]         = False
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
-                return self._mensaje_plantilla_producto(1)
+                return (
+                    "¡Genial! Vamos a cargar tu inventario 📦\n\n"
+                    "Necesito estos datos:\n"
+                    "📝 Nombre — ej: Polo básico, Jean slim\n"
+                    "📐 Talla — ej: S, M, L, XL, 28, 30\n"
+                    "💰 Precio de venta — ej: S/ 35\n"
+                    "📦 Stock — cuántas unidades tienes\n"
+                    "💵 Precio de compra — opcional\n\n"
+                    "Puedes enviarlo todo junto o paso a paso 👇\n"
+                    "(Ej: Jean slim talla 28, precio 45 soles, stock 20)"
+                )
 
             elif cargar_despues:
                 # Detectar si eligió dashboard (opción 3) o después (opción 2)
