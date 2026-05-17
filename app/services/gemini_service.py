@@ -62,7 +62,7 @@ Aunque sea un solo producto, ponlo dentro del array.
 El campo "datos" queda vacío {} para estos tres intents.
 
 ── VENTA ──────────────────────────────────
-Frases: vendí, vendiste, vendimos, salió una, me llevaron, acabo de vender
+Frases: vendí, vendiste, vendimos, salió una, me llevaron, acabo de vender, venta, venta de, ventas
 
 "items": [
   {
@@ -116,7 +116,7 @@ EJEMPLOS VENTA:
   ]
 
 ── GASTO ──────────────────────────────────
-Frases: gasté, he gastado, gaste, pagué, he pagado, pague, 
+Frases: gasté, he gastado, gaste, pagué, he pagado, pague, gasto, gastos, gasto de, compras, 
         compré mercadería, flete, pasajes, alquiler, invertí, 
         salió, me salió, costó, me costó, desembolsé, egreso
 
@@ -692,6 +692,7 @@ No incluyas texto adicional ni markdown."""
             f'Extrae los datos y responde SOLO con JSON válido:\n'
             f'{{"nombre": str o null, "talla": str o null, "precio_venta": float o null, "cantidad": int o null, "precio_compra": float o null}}\n\n'
             f'REGLAS DE EXTRACCIÓN:\n'
+            f'- "nombre" → CORRIGE errores ortográficos y de tipeo (ej. "Poolo" -> "Polo", "báisco" -> "Básico"). Capitaliza cada palabra.\n'
             f'- "precio_venta" → precio al que se VENDE al cliente.\n'
             f'  Señales: "precio", "cuesta", "vale", "lo vendo a", "precio de venta", "vendo a", "sale a"\n'
             f'- "precio_compra" → precio al que se COMPRÓ la mercadería.\n'
@@ -785,14 +786,15 @@ Categorías actuales:
 El comerciante respondió: "{mensaje}"
 
 Clasifica su intención:
-CONFIRMAR → acepta la lista. Señales: "listo", "ok", "bien", "sí", "dale", "perfecto", "ya".
-AGREGAR   → quiere añadir una categoría genérica. valor: nombre de la categoría.
-QUITAR    → quiere eliminar una. valor: número o nombre exacto.
-PRODUCTO  → describe un producto específico con talla/color/modelo (no una categoría).
-DESCONOCIDO → no se puede determinar.
+CONFIRMAR  → acepta la lista. Señales: "listo", "ok", "bien", "sí", "dale", "perfecto", "ya".
+AGREGAR    → quiere añadir una categoría genérica. valor: nombre de la categoría.
+QUITAR     → quiere eliminar una. valor: número o nombre exacto.
+REEMPLAZAR → quiere cambiar el nombre de una categoría (ej. "cambia camisetas por polos"). valor: dict {{"viejo": "nombre viejo", "nuevo": "nombre nuevo"}}.
+PRODUCTO   → describe un producto específico con talla/color/modelo (no una categoría).
+DESCONOCIDO→ no se puede determinar.
 
 Responde ÚNICAMENTE con JSON:
-{{"accion": "CONFIRMAR|AGREGAR|QUITAR|PRODUCTO|DESCONOCIDO", "valor": null, "confianza": "alta|baja"}}"""
+{{"accion": "CONFIRMAR|AGREGAR|QUITAR|REEMPLAZAR|PRODUCTO|DESCONOCIDO", "valor": null, "confianza": "alta|baja"}}"""
         try:
             response = await client.chat.completions.create(
                 model=MODELO_NLP,
@@ -801,7 +803,7 @@ Responde ÚNICAMENTE con JSON:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.0,
-                max_tokens=80,
+                max_tokens=100,
             )
             resultado = self._parsear(response.choices[0].message.content.strip())
             accion = resultado.get("accion", "DESCONOCIDO").upper()
@@ -815,6 +817,11 @@ Responde ÚNICAMENTE con JSON:
             msg = mensaje.strip().lower()
             if any(w in msg for w in ["listo", "ok", "bien", "perfecto", "dale", "sí", "si", "ya"]):
                 return {"accion": "CONFIRMAR", "valor": None, "confianza": "baja"}
+            if "cambia" in msg and "por" in msg:
+                # Fallback rústico: "cambia A por B"
+                m = re.search(r"cambia\s+(.+)\s+por\s+(.+)", msg)
+                if m:
+                    return {"accion": "REEMPLAZAR", "valor": {"viejo": m.group(1).strip(), "nuevo": m.group(2).strip().title()}, "confianza": "baja"}
             if any(w in msg for w in ["agregar", "añadir"]):
                 partes = msg.split(maxsplit=1)
                 return {"accion": "AGREGAR", "valor": partes[1].strip().title() if len(partes) > 1 else None, "confianza": "baja"}
@@ -840,7 +847,7 @@ El usuario responde: "{mensaje}"
 Clasifica:
 TERMINAR     → guardar y terminar. Señales: "listo", "sí", "queda", "terminar", "ya".
 AGREGAR_OTRO → guardar y agregar otro. Señales: "otro", "más", "agregar otro".
-EDITAR       → cambiar algún campo. Extrae los nuevos valores.
+EDITAR       → cambiar algún campo. Extrae los nuevos valores. Si el usuario edita el "nombre", CORRIGE siempre los errores ortográficos y de tipeo (ej. "Poolo" -> "Polo", "báisco" -> "Básico").
 
 Responde SOLO con JSON:
 {{"accion": "TERMINAR|AGREGAR_OTRO|EDITAR|DESCONOCIDO", "cambios": {{"nombre": null, "talla": null, "cantidad": null, "precio_venta": null, "precio_compra": null, "categoria": null}}}}"""

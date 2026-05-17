@@ -941,6 +941,43 @@ class OnboardingService:
                             "Dime el *número* de la que quieres quitar 😊"
                         )
 
+            # ── REEMPLAZAR: cambiar nombre ──
+            if accion == "REEMPLAZAR" and isinstance(valor, dict):
+                viejo = str(valor.get("viejo", "")).strip().lower()
+                nuevo = str(valor.get("nuevo", "")).strip().title()
+                
+                # Buscar por índice (si viejo es un número) o por nombre
+                idx_encontrado = None
+                try:
+                    idx = int(viejo) - 1
+                    if 0 <= idx < len(categorias):
+                        idx_encontrado = idx
+                except ValueError:
+                    idx_encontrado = next(
+                        (i for i, c in enumerate(categorias) if c.lower() == viejo),
+                        None,
+                    )
+                    
+                if idx_encontrado is not None and nuevo:
+                    anterior = categorias[idx_encontrado]
+                    categorias[idx_encontrado] = nuevo
+                    datos_temp["categorias_propuestas"] = categorias
+                    datos_temp["categorias_editadas"] = True
+                    await self.upsert_sesion(negocio_id, "onboarding_5", datos_temp)
+                    lista = self._formatear_lista_categorias(categorias)
+                    return (
+                        f"✏️ Listo, cambié *{anterior}* por *{nuevo}*.\n\n"
+                        f"{lista}\n\n"
+                        "¿Algún otro cambio o seguimos?"
+                    )
+                else:
+                    lista = self._formatear_lista_categorias(categorias)
+                    return (
+                        f"⚠️ No encontré la categoría para cambiar.\n\n"
+                        f"{lista}\n\n"
+                        "Dime el *número* o nombre exacto de la que quieres cambiar 😊"
+                    )
+
             # ── PRODUCTO: el usuario confundió categoría con producto ──
             if accion == "PRODUCTO":
                 lista = self._formatear_lista_categorias(categorias)

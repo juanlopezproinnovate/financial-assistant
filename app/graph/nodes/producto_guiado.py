@@ -343,23 +343,19 @@ async def _handle_confirmacion(
             "agregar_otro": False,
         }
 
-    # ── Guardar ──
-    quiere_guardar = any(w in msg_lower for w in [
-        "guardar", "sí", "si", "ok", "dale", "listo", "bien", "confirmar",
-        "perfecto", "correcto", "todo bien", "así está", "queda"
-    ])
+    # ── Interpretar Intención y Cambios con LLM ──
+    interpretacion = await gemini_service.interpretar_accion_inventario(mensaje, formulario)
+    accion = interpretacion.get("accion", "DESCONOCIDO")
+    campos_llm = interpretacion.get("cambios", {})
 
-    if quiere_guardar:
+    if accion == "TERMINAR":
         return await _guardar_producto(negocio_id, formulario, datos)
 
-    # ── Agregar otro (sin guardar el actual primero no tiene sentido — guardamos y seguimos) ──
-    quiere_otro = any(w in msg_lower for w in ["otro", "agregar otro", "más", "mas", "siguiente"])
-    if quiere_otro:
+    if accion == "AGREGAR_OTRO":
         return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)
 
-    # ── Editar: primero regex explícito, luego LLM como fallback ──
+    # ── Editar: fallback a regex si faltó algo ──
     campos_regex = _extraer_campos_por_regex(mensaje)
-    campos_llm   = await gemini_service.extraer_producto_inventario(mensaje, formulario)
 
     # Merge: regex tiene prioridad porque es más confiable para frases de edición
     campos = {**campos_llm, **{k: v for k, v in campos_regex.items() if v is not None}}
