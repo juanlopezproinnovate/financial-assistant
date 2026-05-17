@@ -1033,27 +1033,58 @@ class OnboardingService:
         # ══════════════════════════════════════════
         #  PASO 5c → Bucle de carga de productos
         # ══════════════════════════════════════════
-        
+
         elif estado == "onboarding_5c":
             from app.graph.nodes.producto_guiado import agregar_producto_guiado
 
             msg_lower       = mensaje.strip().lower()
             productos_count = datos_temp.get("inv_productos_cargados", 0)
-
-            # Detectar si quiere salir / terminar el inventario
-            # Solo cuando NO está en medio de llenar un formulario
             formulario_activo = bool(datos_temp.get("formulario_producto"))
-            palabras_salir = ["después", "despues", "luego", "dashboard", "terminar", "finalizar"]
-            # "listo" / "no" solo terminan si no hay formulario activo
-            if not formulario_activo:
-                palabras_salir += ["no", "listo"]
 
-            if any(w in msg_lower for w in palabras_salir) and not formulario_activo:
+            nombre_prop    = datos_temp.get("nombre_propietario", "")
+            nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
+            prod_txt = f"Ya cargaste *{productos_count}* producto(s). " if productos_count > 0 else ""
+
+            # ── ESCAPE 1: quiere usar el Dashboard (siempre, incluso mid-form) ──
+            quiere_dashboard = any(w in msg_lower for w in [
+                "dashboard", "web", "página", "pagina", "sistema", "computadora",
+                "mejor lo hago", "lo hago desde", "lo cargo desde",
+            ])
+            if quiere_dashboard:
                 await self.completar_onboarding(negocio_id)
                 await self.upsert_sesion(negocio_id, "activo", {})
-                nombre_prop    = datos_temp.get("nombre_propietario", "")
-                nombre_negocio = datos_temp.get("nombre_negocio", "tu negocio")
-                prod_txt = f"Cargaste *{productos_count}* producto(s). " if productos_count > 0 else ""
+                return (
+                    f"¡Sin problema! 🖥️ {prod_txt}Puedes cargar el resto de tu inventario "
+                    f"con calma desde el dashboard:\n\n"
+                    f"👉 http://bit.ly/4dIQAVB\n\n"
+                    f"*{nombre_negocio}* ya está configurado en Quri, {nombre_prop}. 🎉\n\n"
+                    "Recuerda que cuando quieras registrar una venta, un gasto o "
+                    "consultar tu stock, solo escríbeme aquí. 💪"
+                )
+
+            # ── ESCAPE 2: quiere hacerlo después (siempre, incluso mid-form) ──
+            quiere_despues = any(w in msg_lower for w in [
+                "después", "despues", "luego", "más tarde", "mas tarde",
+                "ahorita no", "otro momento", "ahora no", "lo hago después",
+                "lo dejo para", "mañana", "después lo",
+            ])
+            if quiere_despues:
+                await self.completar_onboarding(negocio_id)
+                await self.upsert_sesion(negocio_id, "activo", {})
+                return (
+                    f"¡Perfecto, sin apuro! 😊 {prod_txt}\n\n"
+                    f"*{nombre_negocio}* ya está configurado en Quri, {nombre_prop}. 🎉\n\n"
+                    "Puedes ir registrando tus productos cuando quieras. "
+                    "Por ahora, cuando necesites registrar una venta, un gasto "
+                    "o consultar algo, solo escríbeme aquí. 💪"
+                )
+
+            # ── ESCAPE 3: "listo" / "no" / "terminar" — solo si no hay formulario activo ──
+            if not formulario_activo and any(w in msg_lower for w in [
+                "no", "listo", "terminar", "finalizar", "ya no", "hasta aqui", "hasta aquí"
+            ]):
+                await self.completar_onboarding(negocio_id)
+                await self.upsert_sesion(negocio_id, "activo", {})
                 return (
                     f"¡Todo listo, {nombre_prop}! 🎉\n\n"
                     f"*{nombre_negocio}* ya está configurado en Quri. {prod_txt}\n\n"
@@ -1076,7 +1107,6 @@ class OnboardingService:
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
 
                 if resultado.get("agregar_otro"):
-                    # El usuario ya dijo 'agregar otro' en el mismo mensaje de confirmación
                     return (
                         resultado["respuesta"] +
                         f"\n\n📦 Llevas *{productos_count}* producto(s) 🎉\n"
@@ -1086,13 +1116,14 @@ class OnboardingService:
                 return (
                     resultado["respuesta"] +
                     f"\n\n📦 Llevas *{productos_count}* producto(s) cargado(s) 🎉\n"
-                    "¿Quieres *agregar otro* o escribes *listo* para terminar?"
+                    "¿Quieres *agregar otro*, hacerlo desde el *dashboard* o escribes *listo* para terminar?"
                 )
 
             # Flujo intermedio — persistir datos parciales y seguir
             datos_temp.update(resultado["datos"])
             await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
             return resultado["respuesta"]
+
 
         # ══════════════════════════════════════════
         #  PASO 6 → Capturar horario de cierre

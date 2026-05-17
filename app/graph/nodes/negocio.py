@@ -865,9 +865,6 @@ async def sub_estado_activo_node(state: QuriState) -> QuriState:
     if sub_estado == "ESPERANDO_DECISION_PRODUCTO_NUEVO":
         return await _handle_decision_producto_nuevo(state, datos_pendientes, negocio_id, mensaje)
 
-    if sub_estado == "ESPERANDO_DATOS_PRODUCTO_NUEVO":
-        return await _handle_datos_producto_nuevo(state, datos_pendientes, negocio_id, mensaje)
-
     if sub_estado == "AGREGAR_PRODUCTO_GUIADO":
         return await _handle_agregar_producto_guiado(state, datos_pendientes, negocio_id, mensaje)
 
@@ -1054,22 +1051,26 @@ async def _handle_decision_producto_nuevo(state, datos, negocio_id, mensaje):
         nombre_limpio = separado.get("nombre") or nombre_prod.strip().title()
         talla         = separado.get("talla")
         formulario    = {
-            "nombre": nombre_limpio, "talla": talla,
-            "stock": None, "precio_venta": precio_unitario, "precio_compra": None,
+            "nombre": nombre_limpio, 
+            "talla": talla,
+            "cantidad": None, # para guiado es cantidad, no stock
+            "precio_venta": precio_unitario, 
+            "precio_compra": None,
         }
-        talla_linea   = f"📐 *Talla:* {talla}\n" if talla else "📐 *Talla:* (no especificada)\n"
-        precio_fmt    = f"S/ {precio_unitario:.2f}" if precio_unitario else "(no especificado)"
-        respuesta = (
-            f"Cuéntame más 📦\n\n📝 *Nombre:* {nombre_limpio}\n{talla_linea}"
-            f"📦 *Stock:* (¿cuántas unidades tienes?)\n💰 *Precio de Venta:* {precio_fmt}\n"
-            f"💵 *Precio de Compra:* (opcional)\n\n"
-            f"Edita lo que quieras o escribe *guardar* para confirmar."
-        )
+        nuevos_datos = {
+            **datos, 
+            "formulario_producto": formulario, 
+            "es_desde_venta": True
+        }
+        
+        # Llamar al guiado con mensaje vacío para que lance la primera pregunta
+        resultado = await agregar_producto_guiado(negocio_id, "", nuevos_datos)
+        
         return {
             **state,
-            "respuesta": respuesta,
-            "sub_estado": "ESPERANDO_DATOS_PRODUCTO_NUEVO",
-            "datos_pendientes": {**datos, "formulario_producto": formulario, "sub_estado": "ESPERANDO_DATOS_PRODUCTO_NUEVO"},
+            "respuesta": "Genial, vamos a agregarlo al catálogo primero. 📦\n\n" + resultado["respuesta"],
+            "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
+            "datos_pendientes": {**resultado["datos"], "sub_estado": "AGREGAR_PRODUCTO_GUIADO"},
         }
 
     # CONTINUAR o CANCELAR → registrar venta sin producto_id
@@ -1091,109 +1092,45 @@ async def _handle_decision_producto_nuevo(state, datos, negocio_id, mensaje):
 
 async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
     resultado = await agregar_producto_guiado(negocio_id, mensaje, datos)
+    
+    if resultado["finalizado"] and datos.get("es_desde_venta"):
+        producto_id_nuevo = resultado.get("producto_id_nuevo")
+        cantidad_vendida  = datos.get("cantidad_stock", 1)
+        nombre_prod       = datos.get("nombre_producto_original", "")
+        simbolo           = datos.get("venta_moneda", "S/")
+        nombre_propio     = datos.get("venta_nombre_propio", "Comerciante")
+        
+        if producto_id_nuevo:
+            tx_id = await _guardar_transaccion(
+                negocio_id, "venta", nombre_prod,
+                datos.get("venta_monto", 0), datos.get("venta_moneda_codigo", "PEN"),
+                datos.get("venta_fecha"), datos.get("venta_hora"),
+                cantidad_vendida, producto_id_nuevo,
+            )
+            descuento = await stock_service.ejecutar_descuento_venta(
+                negocio_id=negocio_id, producto_id=producto_id_nuevo,
+                nombre_producto=nombre_prod, cantidad=cantidad_vendida, transaccion_id=tx_id,
+            )
+            respuesta = (
+                resultado["respuesta"] + 
+                f"\n\n✅ Y listo, la venta también quedó registrada, {nombre_propio}\n"
+                f"📝 {nombre_prod} x{cantidad_vendida} → {simbolo} {datos.get('venta_monto', 0):.2f}\n"
+                + descuento["mensaje_stock"]
+            )
+        else:
+            # Hubo error o se canceló el flow guiado y retornó finalizado sin producto_id
+            respuesta = resultado["respuesta"]
+
+        return {
+            **state,
+            "respuesta": respuesta,
+            "sub_estado": "",
+            "datos_pendientes": {},
+        }
+
     return {
         **state,
         "respuesta": resultado["respuesta"],
         "sub_estado": "" if resultado["finalizado"] else "AGREGAR_PRODUCTO_GUIADO",
-        "datos_pendientes": resultado["datos"],
+        "datos_pendientes": {**resultado["datos"], "sub_estado": "AGREGAR_PRODUCTO_GUIADO"} if not resultado["finalizado"] else {},
     }
-
-async def _producto_ya_existe(negocio_id: str, nombre: str, talla: str) -> bool:
-    """Verifica si ya existe un producto con el mismo nombre y talla."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT id FROM productos
-            WHERE negocio_id = $1
-              AND LOWER(nombre) = LOWER($2)
-              AND LOWER(COALESCE(talla, '')) = LOWER(COALESCE($3, ''))
-              AND activo = true
-            LIMIT 1
-            """,
-            negocio_id,
-            nombre.strip(),
-            talla or "",
-        )
-    return row is not None
-
-async def _handle_datos_producto_nuevo(state, datos, negocio_id, mensaje):
-    formulario  = datos.get("formulario_producto", {})
-    nombre_prod = datos.get("nombre_producto_original", "")
-    cantidad    = datos.get("cantidad_stock", 1)
-
-    interpretacion = await gemini_service.interpretar_formulario_producto_venta(mensaje, formulario)
-    accion  = interpretacion["accion"]
-    cambios = interpretacion.get("cambios", {})
-
-    if accion == "EDITAR":
-        for campo, valor in cambios.items():
-            if valor is not None:
-                formulario[campo] = valor
-        pv = formulario.get("precio_venta")
-        pc = formulario.get("precio_compra")
-        st = formulario.get("stock")
-        talla_linea = f"📐 *Talla:* {formulario.get('talla')}\n" if formulario.get("talla") else "📐 *Talla:* (no especificada)\n"
-        respuesta = (
-            f"📝 *Nombre:* {formulario.get('nombre','?')}\n{talla_linea}"
-            f"📦 *Stock:* {st if st is not None else '(no especificado)'}\n"
-            f"💰 *Precio de Venta:* {f'S/ {pv:.2f}' if pv else '(no especificado)'}\n"
-            f"💵 *Precio de Compra:* {f'S/ {pc:.2f}' if pc else '(opcional)'}\n\n"
-            f"¿Queda así? Escribe *guardar*, sigue editando, o *cancelar*."
-        )
-        return {
-            **state, "respuesta": respuesta,
-            "sub_estado": "ESPERANDO_DATOS_PRODUCTO_NUEVO",
-            "datos_pendientes": {**datos, "formulario_producto": formulario, "sub_estado": "ESPERANDO_DATOS_PRODUCTO_NUEVO"},
-        }
-
-    if accion == "GUARDAR":
-        if not formulario.get("nombre"):
-            return {**state, "respuesta": "¿Cómo se llama el producto?", "sub_estado": state["sub_estado"], "datos_pendientes": datos}
-        if formulario.get("stock") is None:
-            return {**state, "respuesta": "¿Cuántas unidades tienes en stock?", "sub_estado": state["sub_estado"], "datos_pendientes": datos}
-
-        producto_id_nuevo = await stock_service.crear_producto(
-            negocio_id=negocio_id,
-            nombre=formulario["nombre"],
-            talla=formulario.get("talla"),
-            precio_venta=formulario.get("precio_venta"),
-            precio_costo=formulario.get("precio_compra"),
-            cantidad_inicial=formulario["stock"],
-        )
-        nombre_final  = formulario["nombre"] + (f" Talla {formulario['talla']}" if formulario.get("talla") else "")
-        simbolo       = datos.get("venta_moneda", "S/")
-        nombre_propio = datos.get("venta_nombre_propio", "Comerciante")
-
-        tx_id = await _guardar_transaccion(
-            negocio_id, "venta", nombre_final,
-            datos.get("venta_monto", 0), datos.get("venta_moneda_codigo", "PEN"),
-            datos.get("venta_fecha"), datos.get("venta_hora"),
-            cantidad, producto_id_nuevo,
-        )
-        descuento = await stock_service.ejecutar_descuento_venta(
-            negocio_id=negocio_id, producto_id=producto_id_nuevo,
-            nombre_producto=nombre_prod, cantidad=cantidad, transaccion_id=tx_id,
-        )
-        respuesta = (
-            f"✅ Venta registrada, {nombre_propio}\n\n"
-            f"📝 Producto: {nombre_final}\n📦 Cantidad: {cantidad}\n"
-            f"💰 Total: {simbolo} {datos.get('venta_monto', 0):.2f}\n\n"
-            f"✅ \"{nombre_final}\" agregado a tu catálogo 📦\n"
-            + descuento["mensaje_stock"]
-        )
-        return {**state, "respuesta": respuesta, "sub_estado": "", "datos_pendientes": {}}
-
-    # CANCELAR
-    simbolo       = datos.get("venta_moneda", "S/")
-    nombre_propio = datos.get("venta_nombre_propio", "Comerciante")
-    await _guardar_transaccion(
-        negocio_id, "venta", nombre_prod,
-        datos.get("venta_monto", 0), datos.get("venta_moneda_codigo", "PEN"),
-        datos.get("venta_fecha"), datos.get("venta_hora"), cantidad,
-    )
-    respuesta = (
-        f"✅ Venta registrada, {nombre_propio} _(sin stock)_\n\n"
-        f"📝 {nombre_prod} | {simbolo} {datos.get('venta_monto', 0):.2f}"
-    )
-    return {**state, "respuesta": respuesta, "sub_estado": "", "datos_pendientes": {}}

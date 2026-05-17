@@ -45,7 +45,7 @@ SIEMPRE responde SOLO con JSON válido. Sin texto antes ni después. Sin markdow
 
 Estructura OBLIGATORIA:
 {
-  "intent": "VENTA|GASTO|INVENTARIO|REPORTE|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
+  "intent": "VENTA|GASTO|INVENTARIO|CATALOGO|REPORTE|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
   "items": [],
   "datos": {},
   "respuesta": "texto para WhatsApp",
@@ -175,7 +175,10 @@ CATALOGO — frases: qué productos tengo, cuáles son mis productos,
            lista de productos, mis productos, qué tengo registrado,
            que tengo en inventario, qué productos tengo en mi inventario,
            muéstrame mi inventario, qué hay en mi inventario,
-           cuántos productos tengo en inventario, ver inventario
+           cuántos productos tengo en inventario, ver inventario,
+           mi inventario, pásame mi catálogo, pasame mi catalogo,
+           envíame mi inventario, enviame mi inventario,
+           quiero ver mi inventario, mi catalogo
 
 datos: {"filtro": str o null}  ← null si no filtra, "blusas" si dice "mis blusas"
 

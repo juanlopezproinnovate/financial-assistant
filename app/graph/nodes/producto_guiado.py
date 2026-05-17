@@ -533,7 +533,7 @@ async def _guardar_producto(
             categoria_id = str(cat_row["id"])
 
     try:
-        await stock_service.crear_producto(
+        producto_id_nuevo = await stock_service.crear_producto(
             negocio_id       = negocio_id,
             nombre           = formulario["nombre"],
             talla            = formulario.get("talla"),
@@ -569,9 +569,13 @@ async def _guardar_producto(
         f"📂 Categoría: *{cat}*\n"
     )
 
+    # Conservar campos del flow padre (ej: venta_monto) pero limpiar los de onboarding guiado
+    datos_padre = {k: v for k, v in datos.items() if k not in ["formulario_producto", "inv_confirmado", "inv_sub_paso"]}
+
     return {
         "respuesta": respuesta,
         "finalizado": True,
-        "datos": {},
+        "datos": datos_padre,
         "agregar_otro": agregar_otro,
+        "producto_id_nuevo": producto_id_nuevo,
     }
