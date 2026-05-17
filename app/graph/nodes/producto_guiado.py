@@ -564,7 +564,16 @@ async def _handle_confirmacion(
                       "confirmar", "perfecto", "correcto", "queda", "ya", "va"}
     _OTRO_WORDS   = {"agregar otro", "otro producto", "otro", "más", "mas", "siguiente"}
 
-    if msg_lower.stri    # ── Interpretar Intención y Cambios con LLM ──
+    if msg_lower.strip() in _GUARDAR_WORDS:
+        return await _guardar_producto(negocio_id, formulario, datos)
+
+    if any(msg_lower.strip() == w or msg_lower.strip().startswith(w) for w in _OTRO_WORDS):
+        return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)
+
+    # ── Detectar renombre explícito antes del LLM: "el nombre es X", "editalo por X" ──
+    nombre_extraido = _extraer_nombre_desde_edicion(mensaje)
+
+    # ── Interpretar Intención y Cambios con LLM ──
     interpretacion = await gemini_service.interpretar_accion_inventario(mensaje, formulario)
     accion = interpretacion.get("accion", "DESCONOCIDO")
     campos_llm = interpretacion.get("cambios", {}) or {}
@@ -658,9 +667,7 @@ async def _handle_confirmacion(
         return await _guardar_producto(negocio_id, formulario, datos)
 
     if accion == "AGREGAR_OTRO":
-        return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)            "datos": {**datos, "formulario_producto": formulario, "inv_confirmado": True},
-            "agregar_otro": False,
-        }
+        return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)
 
     # No entendió
     return {
