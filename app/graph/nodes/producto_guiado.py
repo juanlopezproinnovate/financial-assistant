@@ -52,7 +52,7 @@ def _normalizar_talla(talla: str | None) -> str:
     return t.upper()
 
 
-def _mensaje_confirmacion(formulario: dict) -> str:
+def _mensaje_confirmacion(formulario: dict, es_desde_venta: bool = False) -> str:
     """
     Arma el mensaje de confirmación completo con todos los campos,
     incluyendo categoría asignada.
@@ -67,7 +67,7 @@ def _mensaje_confirmacion(formulario: dict) -> str:
     pc_txt  = f"S/ {pc:.2f}" if pc else "No asignado"
     cat_txt = cat if cat else "Sin categoría"
 
-    return (
+    mensaje_base = (
         f"✅ Esto es lo que registraré:\n\n"
         f"📝 Producto: *{nombre}*\n"
         f"📐 Talla: {talla}\n"
@@ -75,8 +75,11 @@ def _mensaje_confirmacion(formulario: dict) -> str:
         f"💰 Precio venta: S/ {pv:.2f}\n"
         f"💵 Precio compra: {pc_txt}\n"
         f"📂 Categoría: *{cat_txt}*\n\n"
-        f"¿Quieres *guardar*, *editar* algo o *agregar otro* producto? 😊"
     )
+    if es_desde_venta:
+        return mensaje_base + f"¿Quieres *guardar* o *editar* algo? 😊"
+    else:
+        return mensaje_base + f"¿Quieres *guardar*, *editar* algo o *agregar otro* producto? 😊"
 
 
 def _extraer_nombre_desde_edicion(mensaje: str) -> str | None:
@@ -267,9 +270,9 @@ def _extraer_campos_por_regex(mensaje: str) -> dict:
             pass
 
     # ── STOCK / CANTIDAD ──
-    # "stock a 50", "stock es 20", "stock por 55", "cantidad: 10", "tengo 30 unidades"
+    # "stock a 50", "stock es 20", "stock por 55", "cantidad: 10", "tengo 30 unidades", "ponle 50"
     m = re.search(
-        r"(?:stock|cantidad|unidades?)\s*(?:a|:|es|=|son|por)?\s*(\d+)",
+        r"(?:stock|cantidad|unidades?|ponle|poner)\s*(?:a|:|es|=|son|por)?\s*(\d+)",
         msg, re.IGNORECASE
     )
     if m:
@@ -277,6 +280,11 @@ def _extraer_campos_por_regex(mensaje: str) -> dict:
             resultado["cantidad"] = int(m.group(1))
         except ValueError:
             pass
+    # Fallback: "50 unidades"
+    if "cantidad" not in resultado:
+        m = re.search(r"\b(\d+)\s*(?:unidades?|uds?)\b", msg, re.IGNORECASE)
+        if m:
+            resultado["cantidad"] = int(m.group(1))
     # Fallback: "edita/cambia el stock/cantidad por X"
     if "cantidad" not in resultado:
         m = re.search(
@@ -556,39 +564,23 @@ async def _handle_confirmacion(
                       "confirmar", "perfecto", "correcto", "queda", "ya", "va"}
     _OTRO_WORDS   = {"agregar otro", "otro producto", "otro", "más", "mas", "siguiente"}
 
-    if msg_lower.strip() in _GUARDAR_WORDS:
-        return await _guardar_producto(negocio_id, formulario, datos)
-
-    if any(msg_lower.strip() == w or msg_lower.strip().startswith(w) for w in _OTRO_WORDS):
-        return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)
-
-    # ── Detectar renombre explícito antes del LLM: "el nombre es X", "editalo por X" ──
-    nombre_extraido = _extraer_nombre_desde_edicion(mensaje)
-
-    # ── Interpretar Intención y Cambios con LLM ──
+    if msg_lower.stri    # ── Interpretar Intención y Cambios con LLM ──
     interpretacion = await gemini_service.interpretar_accion_inventario(mensaje, formulario)
     accion = interpretacion.get("accion", "DESCONOCIDO")
-    campos_llm = interpretacion.get("cambios", {})
+    campos_llm = interpretacion.get("cambios", {}) or {}
 
-    # La regex de nombre SIEMPRE tiene prioridad sobre el LLM (evita extracciones incorrectas)
-    if nombre_extraido:
-        campos_llm["nombre"] = nombre_extraido
-        if accion == "DESCONOCIDO":
-            accion = "EDITAR"
-
-    if accion == "TERMINAR":
-        return await _guardar_producto(negocio_id, formulario, datos)
-
-    if accion == "AGREGAR_OTRO":
-        return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)
-
-    # ── Editar: fallback a regex si faltó algo ──
+    # ── Editar: extraer con regex también ──
     campos_regex = _extraer_campos_por_regex(mensaje)
+
+    # La regex de nombre explícito SIEMPRE tiene prioridad
+    if nombre_extraido:
+        campos_regex["nombre"] = nombre_extraido
 
     # Merge: regex tiene prioridad porque es más confiable para frases de edición
     campos = {**campos_llm, **{k: v for k, v in campos_regex.items() if v is not None}}
     hubo_cambio = False
 
+    # ── Aplicar Cambios ──
     if campos.get("nombre"):
         formulario["nombre"] = _normalizar_nombre(campos["nombre"])
         hubo_cambio = True
@@ -611,18 +603,15 @@ async def _handle_confirmacion(
         hubo_cambio = True
 
     # Detectar edición de categoría explícita
-    # Patrones: "categoría Shorts", "cambia la categoría a Shorts", "categoría: Jeans"
     match_cat = re.search(
         r"categor[íi]a[s]?\s*(?:[:=]?\s*|\s+(?:a|de|en|es|por)\s+)([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]*)",
         mensaje,
         re.IGNORECASE,
     )
     if match_cat:
-        # Limpiar preposiciones/artículos que puedan haberse colado al inicio
         _PREPOSICIONES = {"a", "de", "en", "es", "por", "la", "el", "los", "las", "un", "una"}
         captura = match_cat.group(1).strip()
         palabras = captura.split()
-        # Quitar palabras iniciales que sean preposición/artículo
         while palabras and palabras[0].lower() in _PREPOSICIONES:
             palabras.pop(0)
         cat_limpia = " ".join(palabras).strip().title()
@@ -630,63 +619,46 @@ async def _handle_confirmacion(
         if not cat_limpia:
             cat_limpia = captura.title()
 
-        # Intentar hacer fuzzy match con categorías existentes del negocio
         pool = await get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT nombre FROM categorias WHERE negocio_id = $1 AND activa = true",
-                negocio_id,
-            )
+            rows = await conn.fetch("SELECT nombre FROM categorias WHERE negocio_id = $1 AND activa = true", negocio_id)
         cats_existentes = [r["nombre"] for r in rows]
 
-        # 1) Match exacto (case-insensitive)
-        cat_final = next(
-            (c for c in cats_existentes if c.lower() == cat_limpia.lower()), None
-        )
-
-        # 2) Match parcial: alguna categoría contiene el texto o viceversa
+        cat_final = next((c for c in cats_existentes if c.lower() == cat_limpia.lower()), None)
         if not cat_final:
-            cat_final = next(
-                (c for c in cats_existentes
-                 if cat_limpia.lower() in c.lower() or c.lower() in cat_limpia.lower()),
-                None,
-            )
-
-        # 3) Sin match → usar el nombre limpio y crear la categoría
+            cat_final = next((c for c in cats_existentes if cat_limpia.lower() in c.lower() or c.lower() in cat_limpia.lower()), None)
         if not cat_final:
             cat_final = cat_limpia
             try:
                 async with pool.acquire() as conn:
                     await conn.execute(
-                        """
-                        INSERT INTO categorias (negocio_id, nombre, tipo, activa)
-                        VALUES ($1, $2, 'inventario', true)
-                        ON CONFLICT DO NOTHING
-                        """,
-                        negocio_id,
-                        cat_final,
+                        "INSERT INTO categorias (negocio_id, nombre, tipo, activa) VALUES ($1, $2, 'inventario', true) ON CONFLICT DO NOTHING",
+                        negocio_id, cat_final,
                     )
-                logger.info(f"[producto_guiado] Categoría creada: {cat_final}")
-            except Exception as e:
-                logger.warning(f"[producto_guiado] No se pudo crear categoría: {e}")
+            except Exception:
+                pass
 
         formulario["categoria"] = cat_final
         hubo_cambio = True
-        logger.info(f"[producto_guiado] Categoría asignada manualmente: '{cat_final}' (captura='{captura}')")
 
     if hubo_cambio:
-        # Si cambiaron nombre, re-asignar categoría automáticamente si no hay ya
         if not formulario.get("categoria"):
             categoria = await _asignar_categoria(negocio_id, formulario["nombre"])
             formulario["categoria"] = categoria
 
         return {
-            "respuesta": (
-                "✏️ Actualizado:\n\n"
-                + _mensaje_confirmacion(formulario)
-            ),
+            "respuesta": "✏️ Actualizado:\n\n" + _mensaje_confirmacion(formulario, datos.get("es_desde_venta", False)),
             "finalizado": False,
             "datos": {**datos, "formulario_producto": formulario, "inv_confirmado": True},
+            "agregar_otro": False,
+        }
+
+    # ── Si NO hubo cambios, ejecutar acción final ──
+    if accion == "TERMINAR":
+        return await _guardar_producto(negocio_id, formulario, datos)
+
+    if accion == "AGREGAR_OTRO":
+        return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)            "datos": {**datos, "formulario_producto": formulario, "inv_confirmado": True},
             "agregar_otro": False,
         }
 
