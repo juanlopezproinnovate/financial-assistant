@@ -19,7 +19,33 @@ logger = logging.getLogger(__name__)
 
 client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 
-MODELO_NLP = "llama-3.3-70b-versatile"
+MODELO_NLP      = "llama-3.3-70b-versatile"   # modelo principal (más inteligente)
+MODELO_FALLBACK = "llama-3.1-8b-instant"       # fallback cuando el principal agota cupo
+
+
+async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> str:
+    """
+    Llama a Groq con failover automático:
+    - Intenta con MODELO_NLP (70b)
+    - Si hay error 429 (rate limit), reintenta con MODELO_FALLBACK (8b)
+    Retorna el texto de la respuesta.
+    """
+    for modelo in (MODELO_NLP, MODELO_FALLBACK):
+        try:
+            resp = await client.chat.completions.create(
+                model=modelo,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str and modelo == MODELO_NLP:
+                logger.warning(f"[Groq] Modelo {modelo} agotado (429) → usando {MODELO_FALLBACK}")
+                continue
+            raise
+    raise RuntimeError("Ambos modelos Groq fallaron")
 
 SYSTEM_PROMPT = """
 Eres Quri, el asistente de negocios por WhatsApp para comerciantes de ropa de Tacna, Perú.
@@ -303,13 +329,7 @@ class GeminiService:
         messages.append({"role": "user", "content": mensaje_final})
 
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=messages,
-                temperature=0.2,
-                max_tokens=1024,  # subimos tokens para soportar múltiples items
-            )
-            raw = response.choices[0].message.content
+            raw = await _groq_chat(messages, max_tokens=1024, temperature=0.2)
             resultado = self._parsear(raw)
 
             # Normalizar: asegurar que siempre existan "items" y "datos"
@@ -384,9 +404,7 @@ class GeminiService:
             f"indice: número del producto si match=exacto, null en cualquier otro caso."
         )
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
+            raw = await _groq_chat([
                     {"role": "system", "content": "Eres un clasificador de productos. Responde SOLO con JSON válido."},
                     {"role": "user", "content": prompt},
                 ],
@@ -419,13 +437,7 @@ class GeminiService:
             f'{{"cantidad": int o null, "talla": str o null, "precio_costo": float o null}}'
         )
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=64,
-            )
-            return self._parsear(response.choices[0].message.content)
+            raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=64, temperature=0.0)
         except Exception as e:
             logger.error(f"[Groq] extraer_datos_stock_inicial error: {e}")
             return {"cantidad": None, "talla": None, "precio_costo": None}
@@ -439,13 +451,7 @@ class GeminiService:
             f"Habla en español peruano cálido. Termina con: ¿te interesa agregarlo (sí/no)? Sin markdown."
         )
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=80,
-            )
-            return response.choices[0].message.content.strip()
+            raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=80, temperature=0.3)
         except Exception:
             precio_str = f" a S/{precio:.2f}" if precio else ""
             return f'No tengo "{nombre}" en tu catálogo. ¿Lo agrego{precio_str} (sí/no)?'
@@ -460,9 +466,8 @@ class GeminiService:
             prompt += f"\nEl usuario escribió: '{mensaje_usuario}'"
 
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
+            raw = await _groq_chat(
+                [
                     {
                         "role": "system",
                         "content": (
@@ -473,10 +478,8 @@ class GeminiService:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,
-                max_tokens=256,
+                max_tokens=256, temperature=0.3,
             )
-            raw = response.choices[0].message.content
             return self._parsear(raw)
 
         except Exception as e:
@@ -514,13 +517,7 @@ Reglas:
 Solo responde el texto, sin JSON."""
 
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.4,
-                max_tokens=200,
-            )
-            return response.choices[0].message.content.strip()
+            raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=200, temperature=0.4)
         except Exception:
             tv = datos.get("total_ventas", 0)
             tg = datos.get("total_gastos", 0)
@@ -547,13 +544,7 @@ Posibles campos: "descripcion", "monto", "moneda", "tipo".
 Si no entiendes qué cambiar, devuelve {{}}.
 No incluyas texto adicional ni markdown."""
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=150,
-            )
-            return self._parsear(response.choices[0].message.content.strip())
+            raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=150, temperature=0.1)
         except Exception as e:
             logger.error(f"[Groq] interpretar_edicion error: {e}")
             return {}
@@ -570,16 +561,8 @@ No incluyas texto adicional ni markdown."""
             f"Si no puedes identificarlo con claridad, devuelve el texto tal como está, limpio."
         )
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": "Eres un extractor de datos preciso. Responde SOLO con el valor solicitado."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=64,
-            )
-            resultado = response.choices[0].message.content.strip().strip('"').strip("'")
+            raw = await _groq_chat([{"role": "system", "content": "Eres un extractor de datos preciso. Responde SOLO con el valor solicitado."}, {"role": "user", "content": prompt}], max_tokens=64, temperature=0.0)
+            resultado = raw
             logger.info(f"[Groq] extraer_dato campo='{campo}' → '{resultado}'")
             return resultado if resultado else mensaje.strip()
         except Exception as e:
@@ -607,16 +590,8 @@ No incluyas texto adicional ni markdown."""
             f"Responde solo el código, sin explicaciones."
         )
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": "Eres un clasificador. Responde SOLO con: PEN, CLP o PEN,CLP"},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=16,
-            )
-            resultado = response.choices[0].message.content.strip().upper().replace(" ", "")
+            raw = await _groq_chat([{"role": "system", "content": "Eres un clasificador. Responde SOLO con: PEN, CLP o PEN,CLP"}, {"role": "user", "content": prompt}], max_tokens=16, temperature=0.0)
+            resultado = raw
             if resultado == "CLP,PEN":
                 resultado = "PEN,CLP"
             if resultado in ("PEN", "CLP", "PEN,CLP"):
@@ -650,16 +625,13 @@ No incluyas texto adicional ni markdown."""
         )
         fallback = ["Polos", "Pantalones", "Vestidos", "Accesorios", "Otros"]
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
+            raw = await _groq_chat(
+                [
                     {"role": "system", "content": "Eres un asistente que responde SOLO con arrays JSON válidos."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,
-                max_tokens=128,
+                max_tokens=128, temperature=0.3,
             )
-            raw = response.choices[0].message.content.strip()
             raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
             categorias = json.loads(raw)
             if isinstance(categorias, list) and len(categorias) >= 3:
@@ -710,16 +682,10 @@ No incluyas texto adicional ni markdown."""
         )
         fallback = {"nombre": None, "talla": None, "precio_venta": None, "cantidad": None, "precio_compra": None}
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
+            raw = await _groq_chat([
                     {"role": "system", "content": "Eres un extractor de datos de productos de ropa. Responde SOLO con JSON válido."},
                     {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=128,
-            )
-            raw = response.choices[0].message.content.strip()
+                ], max_tokens=128, temperature=0.0)
             raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
             resultado = json.loads(raw)
 
@@ -758,16 +724,7 @@ No incluyas texto adicional ni markdown."""
             f'Responde SOLO con JSON: {{"match": true|false, "categoria": "nombre exacto o null"}}'
         )
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": "Eres un clasificador de productos. Responde SOLO con JSON válido."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=64,
-            )
-            raw = re.sub(r"```json\s*|\s*```", "", response.choices[0].message.content.strip()).strip()
+            raw = await _groq_chat([{"role": "system", "content": "Eres un clasificador de productos. Responde SOLO con JSON válido."}, {"role": "user", "content": prompt}], max_tokens=64, temperature=0.0)
             resultado = json.loads(raw)
             if resultado.get("match") and resultado.get("categoria") not in categorias_negocio:
                 resultado["match"] = False
@@ -797,16 +754,8 @@ DESCONOCIDO→ no se puede determinar.
 Responde ÚNICAMENTE con JSON:
 {{"accion": "CONFIRMAR|AGREGAR|QUITAR|REEMPLAZAR|PRODUCTO|DESCONOCIDO", "valor": null, "confianza": "alta|baja"}}"""
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": "Eres un clasificador de intenciones. Responde SOLO con JSON válido."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=100,
-            )
-            resultado = self._parsear(response.choices[0].message.content.strip())
+            raw = await _groq_chat([{"role": "system", "content": "Eres un clasificador de intenciones. Responde SOLO con JSON válido."}, {"role": "user", "content": prompt}], max_tokens=100, temperature=0.0)
+            resultado = json.loads(raw)
             accion = resultado.get("accion", "DESCONOCIDO").upper()
             valor  = resultado.get("valor")
             if accion == "QUITAR" and valor is not None:
@@ -863,16 +812,7 @@ EDITAR       → cambiar algún campo. Extrae SOLO los nuevos valores, NO las pa
 Responde SOLO con JSON:
 {{"accion": "TERMINAR|AGREGAR_OTRO|EDITAR|DESCONOCIDO", "cambios": {{"nombre": null, "talla": null, "cantidad": null, "precio_venta": null, "precio_compra": null, "categoria": null}}}}"""
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": "Eres un extractor de intenciones. Responde SOLO con JSON válido."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=150,
-            )
-            raw = re.sub(r"```json\s*|\s*```", "", response.choices[0].message.content.strip()).strip()
+            raw = await _groq_chat([{"role": "system", "content": "Eres un extractor de intenciones. Responde SOLO con JSON válido."}, {"role": "user", "content": prompt}], max_tokens=150, temperature=0.0)
             resultado = json.loads(raw)
             accion  = resultado.get("accion", "DESCONOCIDO").upper()
             cambios = resultado.get("cambios", {}) or {}
@@ -909,16 +849,7 @@ Responde SOLO con JSON:
             f'Responde SOLO con JSON: {{"nombre": "nombre capitalizado sin talla", "talla": "talla en MAYÚSCULAS o null"}}'
         )
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": "Eres un extractor de datos de productos. Responde SOLO con JSON válido."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=64,
-            )
-            raw = re.sub(r"```json\s*|\s*```", "", response.choices[0].message.content.strip()).strip()
+            raw = await _groq_chat([{"role": "system", "content": "Eres un extractor de datos de productos de ropa. Responde SOLO con JSON válido."}, {"role": "user", "content": prompt}], max_tokens=64, temperature=0.0)
             resultado = json.loads(raw)
             if isinstance(resultado.get("nombre"), str):
                 resultado["nombre"] = resultado["nombre"].strip().title()
@@ -941,16 +872,8 @@ DESCONOCIDO → no se puede determinar.
 
 Responde ÚNICAMENTE con JSON: {{"accion": "AGREGAR|CONTINUAR|CANCELAR|DESCONOCIDO"}}"""
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": "Eres un clasificador de intenciones. Responde SOLO con JSON válido."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=32,
-            )
-            resultado = self._parsear(response.choices[0].message.content.strip())
+            raw = await _groq_chat([{"role": "system", "content": "Eres un clasificador de intenciones. Responde SOLO con JSON válido."}, {"role": "user", "content": prompt}], max_tokens=32, temperature=0.0)
+            resultado = json.loads(raw)
             return {"accion": resultado.get("accion", "DESCONOCIDO").upper()}
         except Exception as e:
             logger.error(f"[Groq] interpretar_decision_producto_nuevo error: {e}")
@@ -980,16 +903,7 @@ EDITAR   → quiere cambiar algo. Extrae los nuevos valores.
 Responde SOLO con JSON:
 {{"accion": "GUARDAR|CANCELAR|EDITAR", "cambios": {{"nombre": null, "talla": null, "stock": null, "precio_venta": null, "precio_compra": null}}}}"""
         try:
-            response = await client.chat.completions.create(
-                model=MODELO_NLP,
-                messages=[
-                    {"role": "system", "content": "Eres un extractor de intenciones. Responde SOLO con JSON válido."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_tokens=128,
-            )
-            raw = re.sub(r"```json\s*|\s*```", "", response.choices[0].message.content.strip()).strip()
+            raw = await _groq_chat([{"role": "system", "content": "Eres un extractor de intenciones. Responde SOLO con JSON válido."}, {"role": "user", "content": prompt}], max_tokens=128, temperature=0.0)
             resultado = json.loads(raw)
             accion  = resultado.get("accion", "DESCONOCIDO").upper()
             cambios = resultado.get("cambios", {}) or {}
