@@ -267,8 +267,8 @@ Mensaje actual: "1"
 """
 
 ONBOARDING_PROMPTS = {
-    1: """Responde SOLO con JSON. Usuario nuevo en Boti, paso 1.
-La "respuesta" debe ser bienvenida cálida que: salude, explique en 2 líneas qué hace Boti (ventas/gastos/inventario por WhatsApp), y pida el nombre del negocio.
+    1: """Responde SOLO con JSON. Usuario nuevo en Quri, paso 1.
+La "respuesta" debe ser bienvenida cálida que: salude, explique en 2 líneas qué hace Quri (ventas/gastos/inventario por WhatsApp), y pida el nombre del negocio.
 {"intent":"ONBOARDING","datos":{},"items":[],"respuesta":"...","requiere_confirmacion":false,"siguiente_paso":""}""",
 
     2: """Responde SOLO con JSON. Paso 2 del onboarding.
@@ -473,7 +473,7 @@ class GeminiService:
                     {
                         "role": "system",
                         "content": (
-                            "Eres Boti, asistente de negocios por WhatsApp para "
+                            "Eres Quri, asistente de negocios por WhatsApp para "
                             "comerciantes de ropa en Tacna, Perú. "
                             "Habla en español peruano cálido y natural."
                         ),
@@ -487,7 +487,7 @@ class GeminiService:
         except Exception as e:
             logger.error(f"[Groq] Error onboarding paso {paso}: {e}")
             fallbacks = {
-                1: "¡Hola! Soy Boti 👋 Te ayudo a controlar ventas y gastos por WhatsApp. ¿Cómo se llama tu negocio?",
+                1: "¡Hola! Soy Quri 👋 Te ayudo a controlar ventas y gastos por WhatsApp. ¿Cómo se llama tu negocio?",
                 2: "¿Qué tipo de ropa vendes principalmente? (dama, caballero, niños, todo)",
                 3: "¿A qué hora cierras tu tienda? Te mando el resumen del día a esa hora 📊",
                 4: "¡Todo listo! 🎉 Prueba escribiendo: 'Vendí 2 polos a S/25 cada uno'",
@@ -518,29 +518,21 @@ class GeminiService:
         if datos.get("producto_top"):
             producto_top_linea = f'- Producto estrella: "{datos["producto_top"]}" con S/ {datos.get("producto_top_monto", 0):.2f} en ventas\n'
 
-        prompt = f"""Eres Quri. Genera un reporte para WhatsApp con estos datos:
-    - Período: {periodo_txt}
-    - Ventas totales: S/ {datos.get('total_ventas', 0):.2f}
-    - Gastos totales: S/ {datos.get('total_gastos', 0):.2f}
-    - Ganancia neta: S/ {datos.get('ganancia_neta', 0):.2f}
-    - Número de ventas: {datos.get('num_transacciones', 0)}
-    - Unidades vendidas: {datos.get('total_unidades', 0)}
-    {producto_top_linea}
-    Reglas:
-    - Usa EXACTAMENTE este formato:
-    📊 Tu reporte está listo.
-    Aquí tienes el resumen de tu tienda de {periodo_txt}:
-
-    🛍️ Ventas: S/ [total_ventas]
-    💸 Gastos: S/ [total_gastos]
-    💰 Ganancia neta: S/ [ganancia_neta]
-    📦 Unidades vendidas: [total_unidades]
-    ⭐ Producto estrella: [producto_top o "Sin datos aún"]
-
-    [frase motivadora corta en español peruano]
-
-    - SIN asteriscos ni markdown
-    - Solo responde el texto, sin JSON"""
+        prompt = (
+            f"Eres Quri, asistente de negocios en WhatsApp. "
+            f"Genera un reporte EXACTAMENTE en este formato, con emojis, sin asteriscos ni markdown:\n\n"
+            f"📊 Tu reporte está listo.\n"
+            f"Aquí tienes el resumen de tu tienda de {periodo_txt}:\n\n"
+            f"🛍️ Ventas: S/ {datos.get('total_ventas', 0):.2f}\n"
+            f"💸 Gastos: S/ {datos.get('total_gastos', 0):.2f}\n"
+            f"💰 Ganancia neta: S/ {datos.get('ganancia_neta', 0):.2f}\n"
+            f"📦 Unidades vendidas: {datos.get('total_unidades', 0)}\n"
+            f"⭐ Producto estrella: {datos.get('producto_top', 'Sin datos aún')}\n\n"
+            f"[aquí una frase motivadora corta y cálida en español peruano]\n\n"
+            f"IMPORTANTE: Responde SOLO con el texto del reporte, "
+            f"reemplazando [aquí una frase motivadora...] por la frase real. "
+            f"No agregues nada más."
+        )
 
         try:
             return await _groq_chat(
@@ -567,7 +559,7 @@ class GeminiService:
     # ──────────────────────────────────────────────────────
 
     async def interpretar_edicion(self, transaccion: dict, mensaje: str) -> dict:
-        prompt = f"""Eres Boti. Un usuario quiere editar una transacción existente.
+        prompt = f"""Eres Quri. Un usuario quiere editar una transacción existente.
 Transacción actual:
 {json.dumps(transaccion, ensure_ascii=False)}
 
