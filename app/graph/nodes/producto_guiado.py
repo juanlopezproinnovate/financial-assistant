@@ -459,9 +459,19 @@ async def agregar_producto_guiado(
             "agregar_otro": False,
         }
 
-    # Si no vino talla, asignar "Única" silenciosamente
+    # Si no vino talla, preguntar en lugar de asignar "Única" silenciosamente
     if "talla" not in formulario or not formulario.get("talla"):
-        formulario["talla"] = "Única"
+        nombre_txt = formulario["nombre"]
+        return {
+            "respuesta": (
+                f"*{nombre_txt}* ✅\n\n"
+                "📐 ¿Qué talla es?\n"
+                "_(Ej: S, M, 32 — o escribe 'única' si no tiene talla)_"
+            ),
+            "finalizado": False,
+            "datos": _datos_actualizados(),
+            "agregar_otro": False,
+        }
 
     if formulario.get("precio_venta") is None:
         nombre_txt = formulario["nombre"]
