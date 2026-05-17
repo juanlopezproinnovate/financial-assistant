@@ -79,6 +79,76 @@ def _mensaje_confirmacion(formulario: dict) -> str:
     )
 
 
+def _extraer_campos_por_regex(mensaje: str) -> dict:
+    """
+    Extrae campos de producto a partir de frases de edición explícitas.
+    Cubre patrones como:
+      - "edita la talla a 40"      → talla=40
+      - "cambia el precio a 35"    → precio_venta=35
+      - "el stock es 15"           → cantidad=15
+      - "precio de compra 20"      → precio_compra=20
+      - "nombre: Polo slim"        → nombre="Polo slim"
+    Retorna un dict con solo los campos detectados (el resto es None).
+    """
+    msg = mensaje.strip()
+    resultado: dict = {}
+
+    # ── TALLA ──
+    # Patrones: "talla a 40", "talla: XL", "talla es M", "cambia la talla a S"
+    m = re.search(
+        r"talla\s*(?:a|:|es|=)?\s*([A-Za-z]{1,4}|\d{2,3})\b",
+        msg, re.IGNORECASE
+    )
+    if m:
+        resultado["talla"] = m.group(1)
+
+    # ── PRECIO VENTA ──
+    # "precio (de venta)? (a|es|:)? 45 (soles)?"
+    m = re.search(
+        r"precio(?:\s+de\s+venta)?\s*(?:a|:|es|=)?\s*(?:s/\s*)?([\d]+(?:[.,]\d+)?)",
+        msg, re.IGNORECASE
+    )
+    if m and "compra" not in msg[max(0, m.start()-10):m.start()].lower():
+        try:
+            resultado["precio_venta"] = float(m.group(1).replace(",", "."))
+        except ValueError:
+            pass
+
+    # ── PRECIO COMPRA ──
+    m = re.search(
+        r"precio\s+de\s+compra\s*(?:a|:|es|=)?\s*(?:s/\s*)?([\d]+(?:[.,]\d+)?)",
+        msg, re.IGNORECASE
+    )
+    if m:
+        try:
+            resultado["precio_compra"] = float(m.group(1).replace(",", "."))
+        except ValueError:
+            pass
+
+    # ── STOCK / CANTIDAD ──
+    # "stock a 50", "stock es 20", "cantidad: 10", "tengo 30 unidades"
+    m = re.search(
+        r"(?:stock|cantidad|unidades?)\s*(?:a|:|es|=|son)?\s*(\d+)",
+        msg, re.IGNORECASE
+    )
+    if m:
+        try:
+            resultado["cantidad"] = int(m.group(1))
+        except ValueError:
+            pass
+
+    # ── NOMBRE ──
+    # "nombre: Polo básico", "nombre es Blusa floral", "cambia el nombre a Jean slim"
+    m = re.search(
+        r"nombre\s*(?:a|:|es|=)?\s*([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]{2,40}?)(?:\s*[,.]|$)",
+        msg, re.IGNORECASE
+    )
+    if m:
+        resultado["nombre"] = m.group(1).strip()
+
+    return resultado
+
+
 async def _asignar_categoria(negocio_id: str, nombre_producto: str) -> str | None:
     """
     Busca la categoría más adecuada para el producto entre las del negocio.
@@ -287,14 +357,17 @@ async def _handle_confirmacion(
     if quiere_otro:
         return await _guardar_producto(negocio_id, formulario, datos, agregar_otro=True)
 
-    # ── Editar: el LLM extrae los campos a cambiar ──
-    campos = await gemini_service.extraer_producto_inventario(mensaje, formulario)
+    # ── Editar: primero regex explícito, luego LLM como fallback ──
+    campos_regex = _extraer_campos_por_regex(mensaje)
+    campos_llm   = await gemini_service.extraer_producto_inventario(mensaje, formulario)
+
+    # Merge: regex tiene prioridad porque es más confiable para frases de edición
+    campos = {**campos_llm, **{k: v for k, v in campos_regex.items() if v is not None}}
     hubo_cambio = False
 
     if campos.get("nombre"):
         formulario["nombre"] = _normalizar_nombre(campos["nombre"])
         hubo_cambio = True
-        # Re-asignar categoría si cambia el nombre
         formulario.pop("categoria", None)
 
     if campos.get("talla") is not None:
@@ -313,32 +386,69 @@ async def _handle_confirmacion(
         formulario["cantidad"] = campos["cantidad"]
         hubo_cambio = True
 
-    # Detectar edición de categoría explícita: "categoría [Nombre]" o "categoría: Nombre"
+    # Detectar edición de categoría explícita
+    # Patrones: "categoría Shorts", "cambia la categoría a Shorts", "categoría: Jeans"
     match_cat = re.search(
-        r"categor[íi]a[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+)",
+        r"categor[íi]a[s]?\s*(?:[:=]?\s*|\s+(?:a|de|en|es|por)\s+)([A-Za-záéíóúÁÉÍÓÚñÑ][A-Za-záéíóúÁÉÍÓÚñÑ\s]*)",
         mensaje,
-        re.IGNORECASE
+        re.IGNORECASE,
     )
     if match_cat:
-        nueva_cat = match_cat.group(1).strip().title()
-        formulario["categoria"] = nueva_cat
+        # Limpiar preposiciones/artículos que puedan haberse colado al inicio
+        _PREPOSICIONES = {"a", "de", "en", "es", "por", "la", "el", "los", "las", "un", "una"}
+        captura = match_cat.group(1).strip()
+        palabras = captura.split()
+        # Quitar palabras iniciales que sean preposición/artículo
+        while palabras and palabras[0].lower() in _PREPOSICIONES:
+            palabras.pop(0)
+        cat_limpia = " ".join(palabras).strip().title()
+
+        if not cat_limpia:
+            cat_limpia = captura.title()
+
+        # Intentar hacer fuzzy match con categorías existentes del negocio
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT nombre FROM categorias WHERE negocio_id = $1 AND activa = true",
+                negocio_id,
+            )
+        cats_existentes = [r["nombre"] for r in rows]
+
+        # 1) Match exacto (case-insensitive)
+        cat_final = next(
+            (c for c in cats_existentes if c.lower() == cat_limpia.lower()), None
+        )
+
+        # 2) Match parcial: alguna categoría contiene el texto o viceversa
+        if not cat_final:
+            cat_final = next(
+                (c for c in cats_existentes
+                 if cat_limpia.lower() in c.lower() or c.lower() in cat_limpia.lower()),
+                None,
+            )
+
+        # 3) Sin match → usar el nombre limpio y crear la categoría
+        if not cat_final:
+            cat_final = cat_limpia
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO categorias (negocio_id, nombre, tipo, activa)
+                        VALUES ($1, $2, 'inventario', true)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        negocio_id,
+                        cat_final,
+                    )
+                logger.info(f"[producto_guiado] Categoría creada: {cat_final}")
+            except Exception as e:
+                logger.warning(f"[producto_guiado] No se pudo crear categoría: {e}")
+
+        formulario["categoria"] = cat_final
         hubo_cambio = True
-        # Si la categoría no existe, crearla
-        try:
-            pool = await get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO categorias (negocio_id, nombre, tipo, activa)
-                    VALUES ($1, $2, 'inventario', true)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    negocio_id,
-                    nueva_cat,
-                )
-            logger.info(f"[producto_guiado] Categoría manual creada: {nueva_cat}")
-        except Exception as e:
-            logger.warning(f"[producto_guiado] No se pudo crear categoría: {e}")
+        logger.info(f"[producto_guiado] Categoría asignada manualmente: '{cat_final}' (captura='{captura}')")
 
     if hubo_cambio:
         # Si cambiaron nombre, re-asignar categoría automáticamente si no hay ya
