@@ -79,6 +79,93 @@ def _mensaje_confirmacion(formulario: dict) -> str:
     )
 
 
+def _extraer_campos_iniciales_regex(mensaje: str) -> dict:
+    """
+    Extractor regex robusto para el PRIMER mensaje del usuario donde manda
+    todos los datos de un producto juntos.
+    Ej: "Jean slim talla 28, precio 45 soles, stock 20"
+    Ej: "polo basico talla M precio 35 stock 50 precio de compra 20"
+    """
+    msg = mensaje.strip()
+    resultado: dict = {}
+
+    # ── PRECIO COMPRA (detectar ANTES para no confundirlo con precio venta) ──
+    m_pc = re.search(
+        r"(?:precio\s+de\s+compra|me\s+cost[oó]|compr[eé]\s+a|lo\s+compr[eé]\s+a|me\s+sali[oó])\s*:?\s*(?:s/\s*)?(\d+(?:[.,]\d+)?)",
+        msg, re.IGNORECASE
+    )
+    if m_pc:
+        try:
+            resultado["precio_compra"] = float(m_pc.group(1).replace(",", "."))
+        except ValueError:
+            pass
+
+    # ── PRECIO VENTA ──
+    m_pv = re.search(
+        r"(?:precio(?:\s+de\s+venta)?|cuesta|vale|a\s+s/|vendo\s+a|sale\s+a)\s*:?\s*(?:s/\s*)?(\d+(?:[.,]\d+)?)",
+        msg, re.IGNORECASE
+    )
+    if m_pv:
+        # Verificar que no sea el precio de compra detectado antes
+        if not m_pc or abs(m_pv.start() - m_pc.start()) > 5:
+            try:
+                resultado["precio_venta"] = float(m_pv.group(1).replace(",", "."))
+            except ValueError:
+                pass
+
+    # Si solo hay un número suelto y no detectamos precio aún, asumirlo como precio_venta
+    if "precio_venta" not in resultado and "precio_compra" not in resultado:
+        m_solo = re.search(r"(?:a|por|en)\s+(?:s/\s*)?(\d+(?:[.,]\d+)?)\s*(?:soles?|sol)?", msg, re.IGNORECASE)
+        if m_solo:
+            try:
+                resultado["precio_venta"] = float(m_solo.group(1).replace(",", "."))
+            except ValueError:
+                pass
+
+    # ── STOCK / CANTIDAD ──
+    m_stock = re.search(
+        r"(?:stock|cantidad|unidades?|tengo|hay|me\s+quedan?)\s*:?\s*(?:de\s+)?(\d+)",
+        msg, re.IGNORECASE
+    )
+    if m_stock:
+        try:
+            resultado["cantidad"] = int(m_stock.group(1))
+        except ValueError:
+            pass
+
+    # ── TALLA ──
+    m_talla = re.search(
+        r"talla\s*:?\s*([A-Za-z]{1,4}|\d{2,3})\b",
+        msg, re.IGNORECASE
+    )
+    if m_talla:
+        resultado["talla"] = m_talla.group(1)
+    else:
+        # Detectar talla sola (S, M, L, XL, XXL, 28, 30, etc.) como palabra aislada
+        m_talla2 = re.search(
+            r"\b(XS|S|M|L|XL|XXL|XXXL|2XL|3XL|\d{2,3})\b",
+            msg, re.IGNORECASE
+        )
+        if m_talla2:
+            resultado["talla"] = m_talla2.group(1)
+
+    # ── NOMBRE ──
+    # Extraer todo lo que viene ANTES de las palabras clave de datos
+    corte_pattern = re.search(
+        r"\b(?:talla|precio|stock|cantidad|cuesta|vale|tengo|unidades?|me\s+cost[oó])\b",
+        msg, re.IGNORECASE
+    )
+    if corte_pattern:
+        nombre_raw = msg[:corte_pattern.start()].strip().rstrip(",;-")
+        if nombre_raw and len(nombre_raw) >= 2:
+            resultado["nombre"] = nombre_raw.strip()
+    elif not any(resultado.values()):
+        # Si no detectamos nada más, el mensaje completo es el nombre
+        resultado["nombre"] = msg.strip()
+
+    return resultado
+
+
 def _extraer_campos_por_regex(mensaje: str) -> dict:
     """
     Extrae campos de producto a partir de frases de edición explícitas.
@@ -250,9 +337,13 @@ async def agregar_producto_guiado(
         return await _handle_confirmacion(negocio_id, mensaje, msg_lower, formulario, datos)
 
     # ── Extraer todos los campos posibles del mensaje ──
-    campos = await gemini_service.extraer_producto_inventario(mensaje, formulario)
+    campos_llm = await gemini_service.extraer_producto_inventario(mensaje, formulario)
+    campos_rx  = _extraer_campos_iniciales_regex(mensaje)
 
-    # Merge inteligente: solo actualizar campos que el LLM detectó
+    # Merge: LLM tiene prioridad, regex cubre cuando el LLM falla silenciosamente
+    campos = {**campos_rx, **{k: v for k, v in campos_llm.items() if v is not None}}
+
+    # Aplicar al formulario
     if campos.get("nombre"):
         formulario["nombre"] = _normalizar_nombre(campos["nombre"])
     if campos.get("talla") is not None:
