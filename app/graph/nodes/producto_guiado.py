@@ -424,33 +424,31 @@ async def agregar_producto_guiado(
     if datos.get("inv_confirmado"):
         return await _handle_confirmacion(negocio_id, mensaje, msg_lower, formulario, datos)
 
-    # ── Extraer todos los campos posibles del mensaje ──
-    campos_llm = await gemini_service.extraer_producto_inventario(mensaje, formulario)
-    campos_rx  = _extraer_campos_iniciales_regex(mensaje)
+    # ── Fast path para respuestas directas a campos faltantes ──
+    m_direct = re.match(r"^(?:s/\s*)?(\d+(?:[.,]\d+)?)\s*(?:soles|unidades|uds|stock)?$", msg_lower)
+    if m_direct and (not formulario.get("talla") or formulario.get("precio_venta") is None or formulario.get("cantidad") is None):
+        val_str = m_direct.group(1).replace(",", ".")
+        val_float = float(val_str)
+        val_int = int(val_float) if val_float.is_integer() else val_float
+        
+        if not formulario.get("talla"):
+            formulario["talla"] = str(val_int)
+        elif formulario.get("precio_venta") is None:
+            formulario["precio_venta"] = val_float
+        elif formulario.get("cantidad") is None:
+            formulario["cantidad"] = int(val_int)
+            
+        campos_llm, campos_rx = {}, {}
+    elif not formulario.get("talla") and re.match(r"^(xs|s|m|l|xl|xxl|xxxl|unica|única|talla unica|talla única)$", msg_lower):
+        formulario["talla"] = _normalizar_talla(msg_lower)
+        campos_llm, campos_rx = {}, {}
+    else:
+        # ── Extraer todos los campos posibles del mensaje ──
+        campos_llm = await gemini_service.extraer_producto_inventario(mensaje, formulario)
+        campos_rx  = _extraer_campos_iniciales_regex(mensaje)
 
     # Merge: LLM tiene prioridad, regex cubre cuando el LLM falla silenciosamente
     campos = {**campos_rx, **{k: v for k, v in campos_llm.items() if v is not None}}
-
-    # Fallback inteligente para respuestas numéricas cortas
-    msg_strip = mensaje.strip().replace(",", ".")
-    if not any(campos.values()):
-        # Si el LLM y regex fallaron, pero es un número:
-        if re.match(r"^\d+(?:\.\d+)?$", msg_strip):
-            val_float = float(msg_strip)
-            val_int = int(val_float) if val_float.is_integer() else val_float
-            
-            if "talla" not in formulario or not formulario.get("talla"):
-                # Si falta talla y mandó un número, debe ser la talla (ej. 32)
-                campos["talla"] = str(val_int)
-                campos.pop("nombre", None)
-            elif formulario.get("precio_venta") is None:
-                # Si falta precio_venta, es el precio
-                campos["precio_venta"] = val_float
-                campos.pop("nombre", None)
-            elif formulario.get("cantidad") is None:
-                # Si falta cantidad, es el stock
-                campos["cantidad"] = int(val_int)
-                campos.pop("nombre", None)
 
     # Aplicar al formulario
     if campos.get("nombre"):
