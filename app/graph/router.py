@@ -24,7 +24,10 @@ from app.services.gemini_service import gemini_service
 logger = logging.getLogger(__name__)
 
 # Intents que pueden interrumpir cualquier sub_estado activo
-INTENTS_INTERRUPTORES = {"REPORTE", "SALUDO", "AYUDA", "CATALOGO"}
+INTENTS_INTERRUPTORES = {
+    "REPORTE", "SALUDO", "AYUDA", "CATALOGO",
+    "VENTA", "GASTO", "INVENTARIO",  # el usuario siempre puede registrar operaciones
+}
 
 # Sub-estados que NO se pueden interrumpir (necesitan respuesta del usuario)
 SUB_ESTADOS_BLOQUEANTES = {
@@ -33,8 +36,7 @@ SUB_ESTADOS_BLOQUEANTES = {
     "ESPERANDO_SELECCION_EDITAR",
     "ESPERANDO_EDICION_TRANSACCION",
     "ESPERANDO_DECISION_PRODUCTO_NUEVO",
-    "ESPERANDO_DATOS_PRODUCTO_NUEVO",
-    "AGREGAR_PRODUCTO_GUIADO"
+    "ESPERANDO_PRECIO_VENTA",
 }
 
 
@@ -66,6 +68,11 @@ async def router_node(state: QuriState) -> QuriState:
     sub_estado = datos_temp.get("sub_estado", "")
 
     # ── 3. Hay sub_estado activo → checar si interrumpir ───
+    # Limpiar sub_estados que no son válidos (restos del onboarding u otros flujos)
+    if sub_estado and sub_estado not in SUB_ESTADOS_BLOQUEANTES:
+        logger.info(f"[Router] {telefono} | sub_estado residual '{sub_estado}' ignorado → flujo normal")
+        sub_estado = ""
+
     if sub_estado in SUB_ESTADOS_BLOQUEANTES:
         # Llamar al LLM igualmente para ver si el usuario quiere otra cosa
         contexto = _build_contexto(negocio)

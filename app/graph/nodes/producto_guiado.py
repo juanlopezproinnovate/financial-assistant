@@ -267,9 +267,9 @@ def _extraer_campos_por_regex(mensaje: str) -> dict:
             pass
 
     # ── STOCK / CANTIDAD ──
-    # "stock a 50", "stock es 20", "cantidad: 10", "tengo 30 unidades"
+    # "stock a 50", "stock es 20", "stock por 55", "cantidad: 10", "tengo 30 unidades"
     m = re.search(
-        r"(?:stock|cantidad|unidades?)\s*(?:a|:|es|=|son)?\s*(\d+)",
+        r"(?:stock|cantidad|unidades?)\s*(?:a|:|es|=|son|por)?\s*(\d+)",
         msg, re.IGNORECASE
     )
     if m:
@@ -277,6 +277,40 @@ def _extraer_campos_por_regex(mensaje: str) -> dict:
             resultado["cantidad"] = int(m.group(1))
         except ValueError:
             pass
+    # Fallback: "edita/cambia el stock/cantidad por X"
+    if "cantidad" not in resultado:
+        m = re.search(
+            r"(?:edita|cambia|modifica)\s+(?:el\s+)?(?:stock|cantidad|unidades?)\s+(?:a|por)\s+(\d+)",
+            msg, re.IGNORECASE
+        )
+        if m:
+            try:
+                resultado["cantidad"] = int(m.group(1))
+            except ValueError:
+                pass
+
+    # ── TALLA desde edita/cambia ──
+    # "edita la talla por M", "cambia la talla a XL"
+    if "talla" not in resultado:
+        m = re.search(
+            r"(?:edita|cambia|modifica)\s+(?:la\s+)?talla\s+(?:a|por)\s+([A-Za-z]{1,4}|\d{2,3})\b",
+            msg, re.IGNORECASE
+        )
+        if m:
+            resultado["talla"] = m.group(1)
+
+    # ── PRECIO VENTA desde edita/cambia ──
+    # "edita el precio por 45", "cambia el precio de venta a 50"
+    if "precio_venta" not in resultado:
+        m = re.search(
+            r"(?:edita|cambia|modifica)\s+(?:el\s+)?precio(?:\s+de\s+venta)?\s+(?:a|por)\s+([\d]+(?:[.,]\d+)?)",
+            msg, re.IGNORECASE
+        )
+        if m and "compra" not in msg[:m.start()].lower():
+            try:
+                resultado["precio_venta"] = float(m.group(1).replace(",", "."))
+            except ValueError:
+                pass
 
     # ── NOMBRE ──
     # "nombre: Polo básico", "nombre es Blusa floral", "cambia el nombre a Jean slim"
@@ -507,8 +541,8 @@ async def _handle_confirmacion(
     accion = interpretacion.get("accion", "DESCONOCIDO")
     campos_llm = interpretacion.get("cambios", {})
 
-    # Si el LLM no extrajo nombre pero la regex sí, inyectarlo
-    if nombre_extraido and not campos_llm.get("nombre"):
+    # La regex de nombre SIEMPRE tiene prioridad sobre el LLM (evita extracciones incorrectas)
+    if nombre_extraido:
         campos_llm["nombre"] = nombre_extraido
         if accion == "DESCONOCIDO":
             accion = "EDITAR"
