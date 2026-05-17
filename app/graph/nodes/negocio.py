@@ -99,6 +99,7 @@ async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> li
         rows = await conn.fetch(
             """
             SELECT t.id, t.tipo, t.descripcion, t.monto, t.moneda,
+                   t.cantidad, t.producto_id::text,
                    to_char(t.created_at AT TIME ZONE COALESCE(n.zona_horaria,'America/Lima'), 'DD/MM') AS fecha_corta
             FROM transacciones t
             JOIN negocios n ON n.id = t.negocio_id
@@ -108,7 +109,13 @@ async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> li
             negocio_id, limite,
         )
     return [
-        {**dict(r), "id": str(r["id"]), "monto": float(r["monto"] or 0)}
+        {
+            **dict(r),
+            "id": str(r["id"]),
+            "monto": float(r["monto"] or 0),
+            "cantidad": int(r["cantidad"] or 1),
+            "producto_id": r["producto_id"],
+        }
         for r in rows
     ]
 
@@ -799,7 +806,9 @@ async def editar_node(state: QuriState) -> QuriState:
     lineas = ["¿Cuál deseas editar?"]
     for i, t in enumerate(ultimas, 1):
         s = SIMBOLOS.get(t["moneda"], t["moneda"])
-        lineas.append(f"{i}. {t.get('fecha_corta','')} | {t['descripcion']} | {s} {t['monto']:.2f}")
+        # ── NUEVO: mostrar cantidad ──
+        cant_txt = f" x{t['cantidad']}" if t.get("cantidad") and t["cantidad"] > 1 else ""
+        lineas.append(f"{i}. {t.get('fecha_corta','')} | {t['descripcion']}{cant_txt} | {s} {t['monto']:.2f}")
     lineas.append("\nEscribe el número o 'cancelar'.")
 
     datos_pendientes = {"ultimas_transacciones": ultimas}
@@ -809,7 +818,6 @@ async def editar_node(state: QuriState) -> QuriState:
         "sub_estado": "ESPERANDO_SELECCION_EDITAR",
         "datos_pendientes": _persist_sub_estado(datos_pendientes, "ESPERANDO_SELECCION_EDITAR"),
     }
-
 
 # ══════════════════════════════════════════════════════════
 #  NODO: RESPUESTA DIRECTA (INCOMPLETO / SALUDO / DESCONOCIDO)
@@ -1024,15 +1032,21 @@ async def _handle_seleccion_editar(state, datos, negocio_id, mensaje):
         if 1 <= seleccion <= len(ultimas):
             tx = ultimas[seleccion - 1]
             simbolo  = SIMBOLOS.get(tx["moneda"], tx["moneda"])
+            cant_txt = f" x{tx['cantidad']}" if tx.get("cantidad") and tx["cantidad"] > 1 else " x1"
             respuesta = (
-                f"Elegiste: {tx['descripcion']} ({simbolo} {tx['monto']:.2f}).\n"
-                f"¿Qué deseas cambiar? (ej. 'cambia el monto a 50' o 'cancelar')"
+                f"Elegiste: {tx['descripcion']}{cant_txt} ({simbolo} {tx['monto']:.2f})\n\n"
+                f"¿Qué deseas cambiar?\n"
+                f"_(ej. 'cambia el monto a 50', 'cambia la cantidad a 3', o 'cancelar')_"
             )
             return {
                 **state,
                 "respuesta": respuesta,
                 "sub_estado": "ESPERANDO_EDICION_TRANSACCION",
-                "datos_pendientes": {**datos, "transaccion_a_editar": tx, "sub_estado": "ESPERANDO_EDICION_TRANSACCION"},
+                "datos_pendientes": {
+                    **datos,
+                    "transaccion_a_editar": tx,
+                    "sub_estado": "ESPERANDO_EDICION_TRANSACCION"
+                },
             }
         return {
             **state,
@@ -1046,31 +1060,60 @@ async def _handle_seleccion_editar(state, datos, negocio_id, mensaje):
             "sub_estado": state["sub_estado"], "datos_pendientes": datos,
         }
 
-
 async def _handle_edicion_transaccion(state, datos, negocio_id, mensaje):
     tx = datos.get("transaccion_a_editar")
     if not tx:
         return {**state, "respuesta": "Ocurrió un error. Operación cancelada.", "sub_estado": "", "datos_pendientes": {}}
 
     cambios = await gemini_service.interpretar_edicion(tx, mensaje)
-    if cambios:
-        sets   = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(cambios))
-        pool   = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                f"UPDATE transacciones SET {sets} WHERE id = $1::uuid",
-                tx["id"], *list(cambios.values()),
-            )
-        cambios_str = ", ".join(f"{k}: {v}" for k, v in cambios.items())
+    if not cambios:
         return {
             **state,
-            "respuesta": f"✅ Actualizado.\nCambios: {cambios_str}",
-            "sub_estado": "", "datos_pendientes": {},
+            "respuesta": "No entendí qué cambiar 🤔 Intenta de otra forma o escribe 'cancelar'.",
+            "sub_estado": state["sub_estado"], "datos_pendientes": datos,
         }
+
+    cantidad_anterior = int(tx.get("cantidad") or 1)
+    cantidad_nueva    = int(cambios.get("cantidad")) if cambios.get("cantidad") is not None else None
+    producto_id       = tx.get("producto_id")
+
+    # ── Actualizar transacción en BD ──
+    sets   = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(cambios))
+    pool   = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE transacciones SET {sets} WHERE id = $1::uuid",
+            tx["id"], *list(cambios.values()),
+        )
+
+    # ── Compensar stock si cambió la cantidad y hay producto vinculado ──
+    msg_stock = ""
+    if cantidad_nueva is not None and producto_id and tx["tipo"] == "venta":
+        diferencia = cantidad_nueva - cantidad_anterior
+        if diferencia > 0:
+            # Vendió más → descontar más stock
+            await stock_service.descontar_stock_bd(
+                producto_id=producto_id,
+                negocio_id=negocio_id,
+                cantidad=diferencia,
+                transaccion_id=tx["id"],
+            )
+            msg_stock = f"\n📦 Stock ajustado: se descontaron {diferencia} unidad(es) adicional(es)."
+        elif diferencia < 0:
+            # Vendió menos → reponer stock
+            await stock_service.reponer_stock_bd(
+                producto_id=producto_id,
+                negocio_id=negocio_id,
+                cantidad=abs(diferencia),
+                motivo="correccion_edicion",
+            )
+            msg_stock = f"\n📦 Stock ajustado: se repusieron {abs(diferencia)} unidad(es)."
+
+    cambios_str = ", ".join(f"{k}: {v}" for k, v in cambios.items())
     return {
         **state,
-        "respuesta": "No entendí qué cambiar 🤔 Intenta de otra forma o escribe 'cancelar'.",
-        "sub_estado": state["sub_estado"], "datos_pendientes": datos,
+        "respuesta": f"✅ Actualizado.\nCambios: {cambios_str}{msg_stock}",
+        "sub_estado": "", "datos_pendientes": {},
     }
 
 

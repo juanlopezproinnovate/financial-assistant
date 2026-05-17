@@ -560,18 +560,19 @@ class GeminiService:
 
     async def interpretar_edicion(self, transaccion: dict, mensaje: str) -> dict:
         prompt = f"""Eres Quri. Un usuario quiere editar una transacción existente.
-Transacción actual:
-{json.dumps(transaccion, ensure_ascii=False)}
+    Transacción actual:
+    {json.dumps(transaccion, ensure_ascii=False)}
 
-El usuario ha dicho: "{mensaje}"
+    El usuario ha dicho: "{mensaje}"
 
-Devuelve SOLO un JSON con los campos que deben actualizarse.
-Posibles campos: "descripcion", "monto", "moneda", "tipo".
-Si no entiendes qué cambiar, devuelve {{}}.
-No incluyas texto adicional ni markdown."""
+    Devuelve SOLO un JSON con los campos que deben actualizarse.
+    Posibles campos: "descripcion", "monto", "moneda", "tipo", "cantidad".
+    - "cantidad" → número entero de unidades vendidas
+    Si no entiendes qué cambiar, devuelve {{}}.
+    No incluyas texto adicional ni markdown."""
         try:
             raw = await _groq_chat([{"role": "user", "content": prompt}], max_tokens=150, temperature=0.1)
-            return raw
+            return self._parsear(raw)
         except Exception as e:
             logger.error(f"[Groq] interpretar_edicion error: {e}")
             return {}
