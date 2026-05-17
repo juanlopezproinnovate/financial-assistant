@@ -380,8 +380,8 @@ async def venta_node(state: QuriState) -> QuriState:
         datos_pendientes["operacion_stock"]  = "venta"
         respuesta = (
             respuesta_parcial +
-            f"¿Cuál de estos es *{primer_pendiente['nombre_producto']}*? 🤔\n\n"
-            f"{lista}\n\nEscribe el número, o *0* si no está en la lista."
+            f"¿A cuál producto te refieres? 🤔\n\n"
+            f"{lista}\n\nDime el número o avísame si *no está* en la lista."
         )
         sub_estado = "ESPERANDO_SELECCION_STOCK"
 
