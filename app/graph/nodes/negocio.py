@@ -266,7 +266,7 @@ async def venta_node(state: QuriState) -> QuriState:
             producto_id  = resultado_stock["producto_id"]
             prod_nombre  = resultado_stock["producto_nombre"]
             prod_talla   = resultado_stock["producto_talla"]
-            nombre_final = prod_nombre + (f" Talla {prod_talla}" if prod_talla else "")
+            nombre_final = prod_nombre + (f" [Talla {prod_talla}]" if prod_talla else "")
 
             tx_id = await _guardar_transaccion(
                 negocio_id, "venta", nombre_final, total_venta,
@@ -607,8 +607,14 @@ async def inventario_node(state: QuriState) -> QuriState:
             **state,
             "respuesta": (
                 "¡Claro! Vamos a registrar el producto 📦\n\n"
-                "¿Cómo se llama el producto?\n"
-                "_(Ej: Polo básico, Jean slim, Blusa floral)_"
+                "Necesito estos datos:\n"
+                "📝 *Nombre* — ej: Polo básico, Jean slim\n"
+                "📐 *Talla* — ej: S, M, L, XL, 28, 30\n"
+                "💰 *Precio de venta* — ej: S/ 35\n"
+                "📦 *Stock* — cuántas unidades tienes\n"
+                "💵 *Precio de compra* — opcional\n\n"
+                "Puedes enviarlo todo junto o paso a paso 👇\n"
+                "_(Ej: Jean slim talla 28, precio 45 soles, stock 20)_"
             ),
             "sub_estado": "AGREGAR_PRODUCTO_GUIADO",
             "datos_pendientes": datos_pendientes,
@@ -873,7 +879,7 @@ async def _handle_seleccion_stock(state, datos, negocio_id, mensaje, msg_lower):
                 prod         = await stock_service.get_producto(producto_id_sel)
                 prod_nombre  = prod["nombre"] if prod else nombre_orig
                 prod_talla   = prod.get("talla") if prod else None
-                nombre_final = prod_nombre + (f" Talla {prod_talla}" if prod_talla else "")
+                nombre_final = prod_nombre + (f" [Talla {prod_talla}]" if prod_talla else "")
 
                 tx_id = await _guardar_transaccion(
                     negocio_id, "venta", nombre_final,

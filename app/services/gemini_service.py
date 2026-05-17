@@ -106,7 +106,9 @@ EJEMPLOS VENTA:
   ]
 
 ── GASTO ──────────────────────────────────
-Frases: gasté, pagué, compré mercadería, flete, pasajes, alquiler
+Frases: gasté, he gastado, gaste, pagué, he pagado, pague, 
+        compré mercadería, flete, pasajes, alquiler, invertí, 
+        salió, me salió, costó, me costó, desembolsé, egreso
 
 "items": [
   {
