@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.database import get_pool
-from app.services.ycloud_service import ycloud
+from app.services import ycloud
 
 logger = logging.getLogger(__name__)
 
