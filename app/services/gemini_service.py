@@ -78,8 +78,8 @@ async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float =
     """
     Llama a Groq con failover automático:
     - Intenta con MODELO_NLP (70b)
-    - Si hay error 429 (rate limit), reintenta con MODELO_FALLBACK (8b)
-    - Si ambos fallan con 429, realiza un fallback rápido a Gemini
+    - Si hay error 429 u otro error, reintenta con MODELO_FALLBACK (8b)
+    - Si ambos fallan, realiza un fallback rápido a Gemini
     Retorna el texto de la respuesta.
     """
     for modelo in (MODELO_NLP, MODELO_FALLBACK):
@@ -92,18 +92,12 @@ async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float =
             )
             return resp.choices[0].message.content.strip()
         except Exception as e:
-            err_str = str(e)
-            if "429" in err_str:
-                if modelo == MODELO_NLP:
-                    logger.warning(f"[Groq] Modelo {modelo} agotado (429) → intentando {MODELO_FALLBACK}")
-                    continue
-                else:
-                    logger.warning(f"[Groq] Ambos modelos en rate limit (429) → iniciando fallback a Gemini")
-                    return await _gemini_chat_fallback(messages, max_tokens, temperature)
-            
-            # Si hay cualquier otro error y estamos en el modelo fallback de Groq, intentamos Gemini por robustez
-            if modelo == MODELO_FALLBACK:
-                logger.error(f"[Groq] Error definitivo en Groq ({e}) → iniciando fallback a Gemini")
+            logger.warning(f"[Groq] Error con modelo {modelo}: {e}")
+            if modelo == MODELO_NLP:
+                logger.warning(f"[Groq] Intentando con modelo fallback: {MODELO_FALLBACK}")
+                continue
+            else:
+                logger.warning(f"[Groq] Ambos modelos fallaron → iniciando fallback a Gemini")
                 try:
                     return await _gemini_chat_fallback(messages, max_tokens, temperature)
                 except Exception as gemini_err:
@@ -1127,7 +1121,15 @@ REGLAS CRÍTICAS:
         
         concepto_norm = normalizar(concepto_lower)
         
-        palabras_alimentacion = ["desayuno", "almuerzo", "cena", "comida", "comer", "restaurante", "menú", "menu", "gaseosa", "agua para tomar", "refrigerio", "alimentos", "antojo", "desayunos", "almuerzos"]
+        # 1. Coincidencia exacta o contención directa inteligente
+        for c in categorias:
+            c_nombre = c["nombre"].strip().lower()
+            c_norm = normalizar(c_nombre)
+            if c_norm == concepto_norm or c_norm in concepto_norm or concepto_norm in c_norm:
+                return str(c["id"])
+
+        # 2. Búsqueda semántica local por palabras clave
+        palabras_alimentacion = ["desayuno", "almuerzo", "cena", "comida", "comer", "restaurante", "menú", "menu", "gaseosa", "agua", "refrigerio", "alimentos", "antojo", "desayunos", "almuerzos", "almuerso"]
         es_alimentacion = any(w in concepto_norm for w in palabras_alimentacion)
         
         palabras_servicios = ["luz", "agua", "internet", "wifi", "teléfono", "telefono", "celular", "cable", "luz y agua", "electricidad", "servicios"]
@@ -1146,17 +1148,18 @@ REGLAS CRÍTICAS:
             c_nombre = c["nombre"].strip().lower()
             c_norm = normalizar(c_nombre)
             
-            if es_alimentacion and ("alimenta" in c_norm or "comida" in c_norm or "desayuno" in c_norm):
+            if es_alimentacion and any(w in c_norm for w in ["alimenta", "comida", "desayuno", "almuerzo", "cena", "menu", "refrigerio", "alimentos"]):
                 return str(c["id"])
-            elif es_servicios and ("servicio" in c_norm or "luz" in c_norm or "agua" in c_norm):
+            elif es_servicios and any(w in c_norm for w in ["servicio", "luz", "agua", "internet", "telefono", "celular"]):
                 return str(c["id"])
-            elif es_transporte and ("transporte" in c_norm or "pasaje" in c_norm or "flete" in c_norm or "envio" in c_norm):
+            elif es_transporte and any(w in c_norm for w in ["transporte", "pasaje", "flete", "taxi", "gasolina", "combustible"]):
                 return str(c["id"])
-            elif es_alquiler and ("alquiler" in c_norm or "renta" in c_norm or "local" in c_norm):
+            elif es_alquiler and any(w in c_norm for w in ["alquiler", "renta", "local", "tienda", "puesto"]):
                 return str(c["id"])
-            elif es_mercaderia and ("mercader" in c_norm or "producto" in c_norm or "compra" in c_norm):
+            elif es_mercaderia and any(w in c_norm for w in ["mercader", "producto", "compra", "ropa", "prenda", "inventario"]):
                 return str(c["id"])
 
+        # 3. Fallback a "Otros"
         for c in categorias:
             if c["nombre"].strip().lower() in ("otros", "otro", "varios", "otros gastos"):
                 return str(c["id"])
