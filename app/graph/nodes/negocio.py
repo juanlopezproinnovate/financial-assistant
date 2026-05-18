@@ -632,13 +632,12 @@ async def catalogo_node(state: QuriState) -> QuriState:
         talla     = f" · Talla {p['talla']}" if p.get("talla") else ""
         precio    = f"S/ {float(p['precio_venta_pen']):.2f}" if p.get("precio_venta_pen") else "sin precio"
         stock     = int(p["stock"])
-        categoria = f" [{p['categoria']}]" if p.get("categoria") else ""
  
         # Alerta visual si el stock está bajo
         stock_emoji = "⚠️" if 0 < stock <= 5 else ("❌" if stock == 0 else "📦")
  
         lineas.append(
-            f"{i}. *{nombre}*{talla}{categoria}\n"
+            f"{i}. *{nombre}*{talla}\n"
             f"   💰 {precio} · {stock_emoji} Stock: {stock} uds"
         )
  
