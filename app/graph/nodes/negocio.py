@@ -1145,8 +1145,8 @@ async def _handle_decision_producto_nuevo(state, datos, negocio_id, mensaje):
             "es_desde_venta": es_desde_venta
         }
         
-        # Pasar el mensaje original para que pueda extraer los datos si el usuario los mandó de golpe
-        resultado = await agregar_producto_guiado(negocio_id, mensaje, nuevos_datos)
+        # Pasar un mensaje vacío para evitar que el número de opción ("1") sea interpretado como stock
+        resultado = await agregar_producto_guiado(negocio_id, "", nuevos_datos)
         
         return {
             **state,
