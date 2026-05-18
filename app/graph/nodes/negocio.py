@@ -207,7 +207,7 @@ async def _guardar_transaccion(
                 INSERT INTO transacciones
                     (negocio_id, tipo, descripcion, monto, moneda,
                      fecha, hora, origen_registro, cantidad, producto_id, categoria_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,'whatsapp',$8,$9,$10)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,'whatsapp',$8,$9,$10::uuid)
                 RETURNING id::text
                 """,
                 negocio_id, tipo, descripcion, float(monto),
@@ -219,7 +219,7 @@ async def _guardar_transaccion(
                 INSERT INTO transacciones
                     (negocio_id, tipo, descripcion, monto, moneda,
                      fecha, origen_registro, cantidad, producto_id, categoria_id)
-                VALUES ($1,$2,$3,$4,$5,CURRENT_DATE,'whatsapp',$6,$7,$8)
+                VALUES ($1,$2,$3,$4,$5,CURRENT_DATE,'whatsapp',$6,$7,$8::uuid)
                 RETURNING id::text
                 """,
                 negocio_id, tipo, descripcion, float(monto),
@@ -519,7 +519,7 @@ async def gasto_node(state: QuriState) -> QuriState:
     lineas.append(f"📅 {f_fecha} {f_hora}\n")
 
     for g in registrados:
-        lineas.append(f"🏷️ {g['categoria']} | {g['concepto']} → {g['simbolo']} {g['monto']:.2f}")
+        lineas.append(f"🏷️ {g['concepto']} [{g['categoria']}] → {g['simbolo']} {g['monto']:.2f}")
 
     if len(registrados) > 1:
         lineas.append(f"\n💸 Total gastado: {SIMBOLOS.get(moneda_gral,'S/')} {total_general:.2f}")

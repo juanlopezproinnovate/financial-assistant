@@ -1039,6 +1039,12 @@ Tienes las siguientes categorías de gasto disponibles en la base de datos:
 {lista_str}
 
 Tu tarea es elegir LA MEJOR categoría para clasificar "{concepto}".
+Reglas de inferencia sugeridas:
+- "desayuno", "almuerzo", "cena", "comida" → "Alimentación" o similar.
+- "agua", "luz", "internet" → "Servicios" o similar.
+- "entrada de productos", "compra" → "Mercadería" o similar.
+- "alquiler" → "Alquiler" o similar.
+
 NO debes inventar categorías nuevas. SOLO puedes elegir el ID de una de las opciones listadas.
 
 Responde SOLO con JSON en este formato:
@@ -1051,11 +1057,15 @@ Responde SOLO con JSON en este formato:
             ], max_tokens=64, temperature=0.0)
             
             resultado = json.loads(raw)
-            cat_id = resultado.get("categoria_id")
+            cat_id = str(resultado.get("categoria_id")).strip()
             
             # Verificar que el ID existe en la lista original
-            if any(str(c["id"]) == str(cat_id) for c in categorias):
-                return str(cat_id)
+            for c in categorias:
+                if str(c["id"]) == cat_id:
+                    return cat_id
+                # Fallback por si la IA devuelve el nombre en vez del ID
+                if c["nombre"].strip().lower() == cat_id.lower():
+                    return str(c["id"])
             return None
         except Exception as e:
             logger.error(f"[Groq] clasificar_gasto error: {e}")
