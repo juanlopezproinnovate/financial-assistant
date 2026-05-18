@@ -532,10 +532,10 @@ async def catalogo_node(state: QuriState) -> QuriState:
     Consulta los productos registrados del negocio en Supabase.
  
     Comportamiento:
-    - Si tiene 10 o menos → muestra todos con stock y precio
-    - Si tiene más de 10  → muestra los 10 más recientes + avisa el total
+    - Muestra los 7 más recientes + avisa el total si hay más
     - Si el usuario filtró (ej: "mis blusas") → filtra por nombre/talla/categoría
     - Stock ≤ 5 unidades → emoji de advertencia ⚠️
+    - Siempre incluye el link al dashboard web al final
     """
     negocio_id = state["negocio_id"]
     datos      = state.get("datos_nlp", {}) or {}
@@ -588,14 +588,14 @@ async def catalogo_node(state: QuriState) -> QuriState:
                     LOWER(c.nombre)  ILIKE $2
                   )
                 ORDER BY p.created_at DESC
-                LIMIT 10
+                LIMIT 7
                 """,
                 negocio_id,
                 f"%{filtro.lower()}%",
             )
         else:
             rows = await conn.fetch(
-                base_select + "ORDER BY p.created_at DESC LIMIT 10",
+                base_select + "ORDER BY p.created_at DESC LIMIT 7",
                 negocio_id,
             )
  
@@ -617,8 +617,8 @@ async def catalogo_node(state: QuriState) -> QuriState:
     # ── Encabezado ──────────────────────────────────────────
     if filtro:
         encabezado = f"📦 Productos con \"{filtro}\" ({mostrados} encontrado{'s' if mostrados != 1 else ''}):\n\n"
-    elif total <= 10:
-        encabezado = f"📦 Tu catálogo completo ({total} producto{'s' if total != 1 else ''}):\n\n"
+    elif total <= 7:
+        encabezado = f"📦 Tu catálogo ({total} producto{'s' if total != 1 else ''}):\n\n"
     else:
         encabezado = (
             f"📦 Tienes *{total} productos* registrados en total.\n"
@@ -642,14 +642,8 @@ async def catalogo_node(state: QuriState) -> QuriState:
             f"   💰 {precio} · {stock_emoji} Stock: {stock} uds"
         )
  
-    # ── Pie de página si hay más de 10 ─────────────────────
-    pie = ""
-    if total > 10 and not filtro:
-        pie = (
-            f"\n\n_Mostrando los últimos {mostrados} de {total} productos._\n"
-            "Para buscar uno específico dime, por ejemplo:\n"
-            "_'muéstrame mis blusas'_ o _'qué tengo en talla M'_"
-        )
+    # ── Pie de página con el link al dashboard web ──
+    pie = "\n\n🌐 Puedes ver tu inventario completo en tu web:\n👉 http://bit.ly/4dIQAVB"
  
     respuesta = encabezado + "\n".join(lineas) + pie
  
