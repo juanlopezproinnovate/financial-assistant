@@ -471,12 +471,11 @@ async def gasto_node(state: QuriState) -> QuriState:
     else:
         aviso_limite = ""
 
-    # Obtener categorías de gasto disponibles para este negocio
+    # Obtener categorías de gasto de toda la base de datos (globales o de cualquier negocio)
     pool = await get_pool()
     async with pool.acquire() as conn:
         cats = await conn.fetch(
-            "SELECT id, nombre FROM categorias WHERE negocio_id = $1 AND LOWER(COALESCE(tipo, 'gasto')) IN ('gasto', 'gastos')", 
-            negocio_id
+            "SELECT id, nombre FROM categorias WHERE LOWER(COALESCE(tipo, 'gasto')) IN ('gasto', 'gastos')"
         )
         categorias_gasto = [{"id": str(r["id"]), "nombre": r["nombre"]} for r in cats]
 
@@ -519,7 +518,12 @@ async def gasto_node(state: QuriState) -> QuriState:
             metodo_pago_item = "Efectivo"
 
         # Clasificar el gasto en una de las categorías existentes usando IA
-        categoria_id = await gemini_service.clasificar_gasto(concepto, categorias_gasto)
+        categoria_id = await gemini_service.clasificar_gasto(
+            concepto=concepto,
+            categorias=categorias_gasto,
+            monto=monto,
+            mensaje_original=state.get("mensaje")
+        )
         
         # Buscar el nombre de la categoría para mostrarlo en el resumen
         categoria_nombre = "Otros"
@@ -1366,17 +1370,21 @@ async def _handle_monto_gasto(state, datos, negocio_id, mensaje):
     hora = datos.get("gasto_hora")
     metodo_pago = datos.get("gasto_metodo_pago") or "Efectivo"
 
-    # 4. Obtener categorías reales del negocio para clasificar
+    # 4. Obtener todas las categorías reales de tipo gasto para clasificar
     pool = await get_pool()
     async with pool.acquire() as conn:
         cats = await conn.fetch(
-            "SELECT id, nombre FROM categorias WHERE negocio_id = $1 AND LOWER(COALESCE(tipo, 'gasto')) IN ('gasto', 'gastos')", 
-            negocio_id
+            "SELECT id, nombre FROM categorias WHERE LOWER(COALESCE(tipo, 'gasto')) IN ('gasto', 'gastos')"
         )
         categorias_gasto = [{"id": str(r["id"]), "nombre": r["nombre"]} for r in cats]
 
     # Clasificar usando el Subagente de IA
-    categoria_id = await gemini_service.clasificar_gasto(concepto, categorias_gasto)
+    categoria_id = await gemini_service.clasificar_gasto(
+        concepto=concepto,
+        categorias=categorias_gasto,
+        monto=monto,
+        mensaje_original=mensaje
+    )
     
     categoria_nombre = "Otros"
     if categoria_id:

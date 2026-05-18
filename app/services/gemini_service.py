@@ -1035,10 +1035,17 @@ Responde SOLO con JSON:
             if any(w in msg for w in ["cancelar", "cancela"]): return {"accion": "CANCELAR", "cambios": {}}
             return {"accion": "EDITAR", "cambios": {}}
 
-    async def clasificar_gasto(self, concepto: str, categorias: list[dict]) -> str | None:
+    async def clasificar_gasto(
+        self,
+        concepto: str,
+        categorias: list[dict],
+        monto: float = None,
+        mensaje_original: str = None,
+    ) -> str | None:
         """
         Dada una lista de diccionarios con 'id' y 'nombre' (categorias de tipo gasto),
         asigna el 'concepto' a la mejor categoría utilizando un Subagente de IA.
+        Recibe el concepto/descripción, el monto y el mensaje original del usuario para mayor precisión.
         Soporta errores ortográficos, typos, abreviaciones y lenguaje coloquial.
         """
         if not categorias:
@@ -1047,15 +1054,24 @@ Responde SOLO con JSON:
         # Formatear la lista de categorías existentes en el negocio
         lista_str = "\n".join(f"- ID: {c['id']} | Nombre: {c['nombre']}" for c in categorias)
         
+        monto_str = f"S/ {monto:.2f}" if monto is not None else "No especificado"
+        msg_str = f'"{mensaje_original}"' if mensaje_original else "No especificado"
+
         prompt = f"""
 Actúa como un Subagente experto en finanzas y clasificación de gastos para pequeños negocios.
 
-El comerciante reportó un gasto con el concepto: "{concepto}"
+Datos del gasto reportado por el comerciante:
+- Mensaje original enviado por el comerciante: {msg_str}
+- Monto del gasto: {monto_str}
+- Descripción/concepto detectado inicialmente: "{concepto}"
 
-Aquí están las categorías de gasto REALES y disponibles en la base de datos de su negocio:
+Aquí están las categorías de gasto REALES y disponibles en la base de datos del negocio:
 {lista_str}
 
-Tu objetivo es analizar el concepto del gasto y CLASIFICARLO en una de las categorías disponibles.
+Tu objetivo es:
+1. Analizar el mensaje original del comerciante, su monto y el concepto inicial para detectar con precisión la descripción/concepto real del gasto.
+2. Clasificar el gasto en una de las categorías disponibles basándote en la descripción/concepto real y el contexto.
+
 Dado que los usuarios escriben rápido y pueden tener errores ortográficos, abreviaciones o usar lenguaje coloquial (ej. typos como "desayunoo", "deasyuno", "almuerso", "comidita", "menu", "servicios", "luz", "yape", etc.), debes usar razonamiento inteligente.
 
 Guía de razonamiento semántico:
