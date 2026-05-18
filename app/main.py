@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from app.database import connect_db, disconnect_db
 from app.routers import health, webhook, auth
 from fastapi.middleware.cors import CORSMiddleware
+from app.services.scheduler_service import scheduler_service
+
 
 # Logging básico — en Railway los logs aparecen en la consola
 logging.basicConfig(
@@ -16,7 +18,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-from app.services.scheduler_service import scheduler_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

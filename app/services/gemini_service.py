@@ -136,7 +136,7 @@ SIEMPRE responde SOLO con JSON válido. Sin texto antes ni después. Sin markdow
 
 Estructura OBLIGATORIA:
 {
-  "intent": "VENTA|GASTO|INVENTARIO|CATALOGO|REPORTE|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
+  "intent": "VENTA|GASTO|INVENTARIO|CATALOGO|REPORTE|RECORDATORIO|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
   "items": [],
   "datos": {},
   "respuesta": "texto para WhatsApp",
@@ -297,6 +297,15 @@ datos: {}
 
 REPORTE — frases: cómo voy, cuánto vendí, resumen, total, mis ventas
 datos: {"periodo": "hoy|ayer|semana|mes"}
+
+RECORDATORIO — frases: recuérdame, avísame, no olvides, recuérdame que, 
+               ponme un recordatorio, avísame a las, alértame
+datos: {
+  "mensaje_recordatorio": str,   — qué recordar, en infinitivo limpio
+                                    ej: "recoger la mercadería de Juan en el almacén"
+  "fecha_hora": "YYYY-MM-DDTHH:MM:SS"  — fecha y hora en ISO, usando la fecha de hoy
+                                          si el usuario solo dio hora
+}
 
 SALUDO — frases: hola, buenas, buenos días, quri, hola quri, chatbot, asistente, ey, oye
 Responde con energía y pregunta en qué ayudas.

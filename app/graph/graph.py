@@ -28,6 +28,7 @@ from app.graph.nodes.negocio import (
     sub_estado_activo_node,
 )
 from app.services.onboarding_service import onboarding_service
+from app.graph.nodes.recordatorio_node import recordatorio_node
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ def _build_graph() -> StateGraph:
     g.add_node("editar",           editar_node)
     g.add_node("respuesta_directa",respuesta_directa_node)
     g.add_node("sub_estado_activo",sub_estado_activo_node)
+    g.add_node("recordatorio", recordatorio_node)
     # Nodo onboarding: usa el servicio existente sin modificarlo
     g.add_node("onboarding",       onboarding_node)
     g.add_node("catalogo", catalogo_node)
@@ -79,7 +81,8 @@ def _build_graph() -> StateGraph:
             "respuesta_directa": "respuesta_directa",
             "sub_estado_activo": "sub_estado_activo",
             "onboarding":        "onboarding",
-            "catalogo":          "catalogo"
+            "catalogo":          "catalogo",
+            "recordatorio": "recordatorio"
         },
     )
 
@@ -90,6 +93,7 @@ def _build_graph() -> StateGraph:
         "sub_estado_activo", "onboarding", "catalogo",
     ]:
         g.add_edge(nodo, END)
+        g.add_edge("recordatorio", END)
 
     return g.compile()
 

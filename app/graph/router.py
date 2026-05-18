@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Intents que pueden interrumpir cualquier sub_estado activo
 INTENTS_INTERRUPTORES = {
-    "REPORTE", "SALUDO", "AYUDA", "CATALOGO",
+    "REPORTE", "SALUDO", "AYUDA", "CATALOGO", "RECORDATORIO", 
     "VENTA", "GASTO", "INVENTARIO",  # el usuario siempre puede registrar operaciones
 }
 
@@ -203,7 +203,8 @@ def _intent_a_nodo(intent: str) -> str:
         "SALUDO":                "respuesta_directa",
         "AYUDA":                 "respuesta_directa",
         "DESCONOCIDO":           "respuesta_directa",
-        "CATALOGO":              "catalogo"
+        "CATALOGO":              "catalogo",
+        "RECORDATORIO":          "recordatorio"
     }
     return mapa.get(intent, "respuesta_directa")
 
