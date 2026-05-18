@@ -16,12 +16,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+from app.services.scheduler_service import scheduler_service
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Se ejecuta al iniciar y al apagar la app."""
     logger.info("🚀 Iniciando Chatbot Tacna…")
     await connect_db()
+    
+    # Iniciar scheduler de tareas en segundo plano
+    scheduler_service.start()
+    
     yield
+    
+    scheduler_service.stop()
     await disconnect_db()
     logger.info("🛑 Chatbot Tacna detenido.")
 

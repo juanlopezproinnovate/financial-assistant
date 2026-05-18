@@ -17,6 +17,7 @@ con "respuesta" y el nuevo "sub_estado" (vacío si el flujo terminó).
 
 import logging
 import datetime
+import pytz
 from zoneinfo import ZoneInfo
 
 from app.graph.state import QuriState
@@ -214,16 +215,17 @@ async def _guardar_transaccion(
                 moneda, fecha_obj, hora_obj, cantidad, producto_id, categoria_id,
             )
         else:
+            hoy_lima = datetime.datetime.now(pytz.timezone("America/Lima")).date()
             row = await conn.fetchrow(
                 """
                 INSERT INTO transacciones
                     (negocio_id, tipo, descripcion, monto, moneda,
                      fecha, origen_registro, cantidad, producto_id, categoria_id)
-                VALUES ($1,$2,$3,$4,$5,CURRENT_DATE,'whatsapp',$6,$7,$8::uuid)
+                VALUES ($1,$2,$3,$4,$5,$6,'whatsapp',$7,$8,$9::uuid)
                 RETURNING id::text
                 """,
                 negocio_id, tipo, descripcion, float(monto),
-                moneda, cantidad, producto_id, categoria_id,
+                moneda, hoy_lima, cantidad, producto_id, categoria_id,
             )
     tx_id = row["id"] if row else None
     logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto} | id={tx_id}")
