@@ -1030,7 +1030,6 @@ class OnboardingService:
                 await self.upsert_sesion(negocio_id, "onboarding_5c", datos_temp)
                 return (
                     "¡Genial! Vamos a cargar tu inventario 📦\n\n"
-                    "Puedes enviarme los datos de tu primer producto.\n"
                     "Puedes escribirlo todo junto o poco a poco 👇\n\n"
                     "📝 *Nombre* — ej: Polo básico, Jean slim\n"
                     "📐 *Talla* — ej: S, M, L, XL, 28, 30 (o 'talla única')\n"
@@ -1049,12 +1048,12 @@ class OnboardingService:
                     return (
                         "¡Perfecto! 🖥️ Puedes cargar tu inventario completo desde aquí:\n\n"
                         "👉 http://bit.ly/4dIQAVB\n\n"
-                        "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
+                        "*Última pregunta: ¿A qué hora cierras tu tienda*?\n"
                         "_(Ej: 8pm, 20:00, 9 de la noche)_"
                     )
                 return (
                     "Sin problema, puedes cargarlo cuando quieras 😊\n\n"
-                    "Última pregunta: ¿A qué hora *cierras tu tienda*?\n"
+                    "*Última pregunta: ¿A qué hora cierras tu tienda*?\n"
                     "_(Ej: 8pm, 20:00, 9 de la noche)_"
                 )
 

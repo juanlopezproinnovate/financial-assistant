@@ -100,8 +100,6 @@ async def _process_text(from_number: str, text: str, es_audio: bool = False) -> 
 
 
 async def _process_audio(from_number: str, msg: dict) -> None:
-    await ycloud.send_text(from_number, "🎙️ Escuchando tu audio...")
-
     audio_data = msg.get("audio", {})
     audio_url  = audio_data.get("link", "")
     mime_type  = audio_data.get("mime_type", "audio/ogg")
@@ -117,13 +115,23 @@ async def _process_audio(from_number: str, msg: dict) -> None:
         return
 
     logger.info(f"[Audio→Texto] {from_number}: '{texto_transcrito}'")
-    await ycloud.send_text(from_number, f"🎙️ Escuché: «{texto_transcrito}»")
     await _process_text(from_number, texto_transcrito, es_audio=True)
 
 
 async def _responder_con_voz(from_number: str, texto: str) -> None:
     try:
-        local_path  = await polly_service.text_to_speech(texto)
+        import re
+        patron = re.compile(
+            r'[\U00010000-\U0010FFFF]|'
+            r'[\u2600-\u27BF]|'
+            r'[\u2300-\u23FF]|'
+            r'[\u2b50]|'
+            r'\ufe0f'
+        )
+        texto_limpio = patron.sub('', texto)
+        texto_limpio = re.sub(r'\s+', ' ', texto_limpio).strip()
+
+        local_path  = await polly_service.text_to_speech(texto_limpio)
         if not local_path:
             return
         file_name   = f"voz_{uuid.uuid4()}.mp3"
