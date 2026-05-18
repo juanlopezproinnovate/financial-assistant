@@ -83,11 +83,17 @@ async def recordatorio_node(state: QuriState) -> QuriState:
     if fecha_hora_local.date() != hoy:
         fecha_fmt = f" el {fecha_hora_local.strftime('%d/%m')}"
 
+    fecha_linea = f"📅 Fecha: {fecha_hora_local.strftime('%d/%m/%Y')}\n" if fecha_hora_local.date() != hoy else ""
+
     return {
         **state,
         "respuesta": (
-            f"Listo {nombre_propio}, te recuerdo{fecha_fmt} a las {hora_fmt} "
-            f"que tienes que {mensaje_recordatorio} 🔔"
+            f"Listo {nombre_propio}, tu recordatorio quedó guardado ✅\n\n"
+            f"🔔 *Recordatorio programado*\n"
+            f"⏰ Hora: {hora_fmt}\n"
+            f"{fecha_linea}"
+            f"📝 Actividad: {mensaje_recordatorio.capitalize()}\n\n"
+            f"_Te avisaré puntualmente por aquí_ 😊"
         ),
         "sub_estado": "",
         "datos_pendientes": {},
