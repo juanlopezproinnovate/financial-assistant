@@ -94,6 +94,11 @@ def _extraer_nombre_desde_edicion(mensaje: str) -> str | None:
       - "el nombre es Polo Básico editalo"
     """
     msg = mensaje.strip()
+    msg_lower = msg.lower()
+
+    # Solo extraer nombre si el mensaje menciona explícitamente nombre/producto/titulo/título
+    if not any(w in msg_lower for w in ["nombre", "producto", "titulo", "título"]):
+        return None
 
     # ── Capa 1: verbo de edición + separador "por/a/como" al final ──
     # Detectar si hay un verbo de comando de edición
@@ -188,7 +193,7 @@ def _extraer_campos_iniciales_regex(mensaje: str) -> dict:
 
     # ── TALLA ──
     m_talla = re.search(
-        r"talla\s*:?\s*([A-Za-z]{1,4}|\d{2,3})\b",
+        r"talla\s*:?\s*([A-Za-záéíóúÁÉÍÓÚñÑ\d]{1,10})\b",
         msg, re.IGNORECASE
     )
     if m_talla:
@@ -238,9 +243,9 @@ def _extraer_campos_por_regex(mensaje: str) -> dict:
     resultado: dict = {}
 
     # ── TALLA ──
-    # Patrones: "talla a 40", "talla: XL", "talla es M", "cambia la talla a S"
+    # Patrones: "talla a 40", "talla: XL", "talla es M", "cambia la talla a S", "talla a única"
     m = re.search(
-        r"talla\s*(?:a|:|es|=)?\s*([A-Za-z]{1,4}|\d{2,3})\b",
+        r"talla\s*(?:a|:|es|=)?\s*([A-Za-záéíóúÁÉÍÓÚñÑ\d]{1,10})\b",
         msg, re.IGNORECASE
     )
     if m:
@@ -301,7 +306,7 @@ def _extraer_campos_por_regex(mensaje: str) -> dict:
     # "edita la talla por M", "cambia la talla a XL"
     if "talla" not in resultado:
         m = re.search(
-            r"(?:edita|cambia|modifica)\s+(?:la\s+)?talla\s+(?:a|por)\s+([A-Za-z]{1,4}|\d{2,3})\b",
+            r"(?:edita|cambia|modifica)\s+(?:la\s+)?talla\s+(?:a|por)\s+([A-Za-záéíóúÁÉÍÓÚñÑ\d]{1,10})\b",
             msg, re.IGNORECASE
         )
         if m:
