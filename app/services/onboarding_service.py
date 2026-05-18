@@ -1180,7 +1180,19 @@ class OnboardingService:
         #  PASO 6 → Capturar horario de cierre
         # ══════════════════════════════════════════
         elif estado == "onboarding_6":
-            # Horario ya guardado en onboarding_3b — aquí solo cerramos el onboarding
+            horario = await gemini_service.extraer_dato(
+                campo="horario de cierre de tienda (devuélvelo estrictamente en formato HH:MM de 24 horas, e.g. 20:00. Si dice '8 pm' -> 20:00. Si dice '9 y media' -> 21:30. Si no está claro asume 20:00)",
+                mensaje=mensaje
+            )
+            
+            horario_limpio = horario.replace("'", "").replace('"', "").strip()
+            # Validar formato HH:MM básico o fallback
+            if len(horario_limpio) != 5 or ":" not in horario_limpio:
+                horario_limpio = "20:00"
+
+            # Actualizar horario_cierre en negocios
+            await self.actualizar_negocio(negocio_id, horario_cierre=horario_limpio)
+            
             await self.completar_onboarding(negocio_id)
             await self.upsert_sesion(negocio_id, "activo", {})
 

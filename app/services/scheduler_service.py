@@ -15,10 +15,10 @@ class SchedulerService:
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone("America/Lima"))
 
     def start(self):
-        # Programar reporte de cierre todos los días a las 20:00 (8 PM)
+        # Programar reporte de cierre para evaluar cada 30 minutos
         self.scheduler.add_job(
             self.enviar_reporte_cierre,
-            CronTrigger(hour=20, minute=0),
+            CronTrigger(minute="0,30"),
             id="reporte_cierre_diario",
             replace_existing=True
         )
@@ -30,16 +30,26 @@ class SchedulerService:
         logger.info("🛑 Scheduler de tareas detenido.")
 
     async def enviar_reporte_cierre(self):
-        """Envia el resumen del día y alerta de stock bajo a todos los negocios activos."""
-        logger.info("[Scheduler] Ejecutando tarea de reporte de cierre diario...")
+        """Envia el resumen del día y alerta de stock bajo a los negocios que cierran en este momento."""
+        hoy_lima = datetime.now(pytz.timezone("America/Lima"))
+        hora_actual = hoy_lima.strftime("%H:%M")
+        
+        logger.info(f"[Scheduler] Ejecutando tarea de reporte de cierre para horario: {hora_actual}...")
         pool = await get_pool()
         
         async with pool.acquire() as conn:
-            # Obtener negocios activos
-            negocios = await conn.fetch("SELECT id, telefono FROM negocios WHERE estado = 'activo'")
+            # Obtener negocios activos cuyo horario de cierre coincide
+            negocios = await conn.fetch(
+                "SELECT id, telefono FROM negocios WHERE estado = 'activo' AND horario_cierre = $1", 
+                hora_actual
+            )
             
+            if not negocios:
+                logger.info(f"[Scheduler] Ningún negocio configurado para cerrar a las {hora_actual}.")
+                return
+
             for negocio in negocios:
-                negocio_id = negocio["id"]
+                negocio_id = str(negocio["id"])
                 telefono = negocio["telefono"]
                 
                 try:
