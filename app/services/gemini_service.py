@@ -13,14 +13,65 @@ import re
 import logging
 import datetime
 from groq import AsyncGroq
+import google.generativeai as genai
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-client = AsyncGroq(api_key=settings.GROQ_API_KEY)
+# Configurar Groq con max_retries=0 para evitar delays de 19+ segundos en rate limit
+client = AsyncGroq(api_key=settings.GROQ_API_KEY, max_retries=0)
+
+# Configurar Gemini como proveedor de fallback
+if settings.GEMINI_API_KEY:
+    genai.configure(api_key=settings.GEMINI_API_KEY)
 
 MODELO_NLP      = "llama-3.3-70b-versatile"   # modelo principal (más inteligente)
 MODELO_FALLBACK = "llama-3.1-8b-instant"       # fallback cuando el principal agota cupo
+
+
+async def _gemini_chat_fallback(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> str:
+    """
+    Fallback rápido a Gemini cuando Groq responde con 429 (rate limit).
+    Convierte el formato de mensajes de OpenAI a Gemini de forma transparente.
+    """
+    if not settings.GEMINI_API_KEY:
+        raise RuntimeError("No se puede hacer fallback a Gemini porque GEMINI_API_KEY no está configurada")
+
+    try:
+        system_instruction = None
+        contents = []
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "system":
+                system_instruction = content
+            else:
+                gemini_role = "user" if role == "user" else "model"
+                contents.append({
+                    "role": gemini_role,
+                    "parts": [content]
+                })
+
+        model_name = settings.GEMINI_MODEL or "gemini-2.0-flash"
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=system_instruction
+        )
+
+        generation_config = genai.types.GenerationConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
+
+        logger.info(f"[Gemini Fallback] Intentando llamada a {model_name}...")
+        response = await model.generate_content_async(
+            contents=contents,
+            generation_config=generation_config
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.error(f"[Gemini Fallback] Error crítico en el fallback de Gemini: {e}")
+        raise
 
 
 async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> str:
@@ -28,6 +79,7 @@ async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float =
     Llama a Groq con failover automático:
     - Intenta con MODELO_NLP (70b)
     - Si hay error 429 (rate limit), reintenta con MODELO_FALLBACK (8b)
+    - Si ambos fallan con 429, realiza un fallback rápido a Gemini
     Retorna el texto de la respuesta.
     """
     for modelo in (MODELO_NLP, MODELO_FALLBACK):
@@ -41,11 +93,23 @@ async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float =
             return resp.choices[0].message.content.strip()
         except Exception as e:
             err_str = str(e)
-            if "429" in err_str and modelo == MODELO_NLP:
-                logger.warning(f"[Groq] Modelo {modelo} agotado (429) → usando {MODELO_FALLBACK}")
-                continue
+            if "429" in err_str:
+                if modelo == MODELO_NLP:
+                    logger.warning(f"[Groq] Modelo {modelo} agotado (429) → intentando {MODELO_FALLBACK}")
+                    continue
+                else:
+                    logger.warning(f"[Groq] Ambos modelos en rate limit (429) → iniciando fallback a Gemini")
+                    return await _gemini_chat_fallback(messages, max_tokens, temperature)
+            
+            # Si hay cualquier otro error y estamos en el modelo fallback de Groq, intentamos Gemini por robustez
+            if modelo == MODELO_FALLBACK:
+                logger.error(f"[Groq] Error definitivo en Groq ({e}) → iniciando fallback a Gemini")
+                try:
+                    return await _gemini_chat_fallback(messages, max_tokens, temperature)
+                except Exception as gemini_err:
+                    logger.error(f"[Gemini Fallback] Fallback de Gemini también falló: {gemini_err}")
             raise
-    raise RuntimeError("Ambos modelos Groq fallaron")
+    raise RuntimeError("Ambos modelos Groq fallaron y el fallback de Gemini no pudo ejecutarse")
 
 SYSTEM_PROMPT = """
 Eres Quri, el asistente de negocios por WhatsApp para comerciantes de ropa de Tacna, Perú.
