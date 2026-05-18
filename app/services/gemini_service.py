@@ -298,7 +298,7 @@ datos: {}
 REPORTE — frases: cómo voy, cuánto vendí, resumen, total, mis ventas
 datos: {"periodo": "hoy|ayer|semana|mes"}
 
-SALUDO — hola, buenas, buenos días
+SALUDO — frases: hola, buenas, buenos días, quri, hola quri, chatbot, asistente, ey, oye
 Responde con energía y pregunta en qué ayudas.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1022,6 +1022,44 @@ Responde SOLO con JSON:
             if any(w in msg for w in ["guardar", "listo", "ok", "sí", "si", "dale", "bien"]): return {"accion": "GUARDAR", "cambios": {}}
             if any(w in msg for w in ["cancelar", "cancela"]): return {"accion": "CANCELAR", "cambios": {}}
             return {"accion": "EDITAR", "cambios": {}}
+
+    async def clasificar_gasto(self, concepto: str, categorias: list[dict]) -> str | None:
+        """
+        Dada una lista de diccionarios con 'id' y 'nombre' (categorias de tipo gasto),
+        asigna el 'concepto' a la mejor categoría y retorna el 'id' de esa categoría.
+        """
+        if not categorias:
+            return None
+            
+        lista_str = "\n".join(f"- ID: {c['id']} | Nombre: {c['nombre']}" for c in categorias)
+        prompt = f"""
+El comerciante reportó un gasto con el concepto: "{concepto}"
+
+Tienes las siguientes categorías de gasto disponibles en la base de datos:
+{lista_str}
+
+Tu tarea es elegir LA MEJOR categoría para clasificar "{concepto}".
+NO debes inventar categorías nuevas. SOLO puedes elegir el ID de una de las opciones listadas.
+
+Responde SOLO con JSON en este formato:
+{{"categoria_id": "el-id-seleccionado"}}
+"""
+        try:
+            raw = await _groq_chat([
+                {"role": "system", "content": "Eres un experto en finanzas clasificando gastos. Responde SOLO con JSON."},
+                {"role": "user", "content": prompt}
+            ], max_tokens=64, temperature=0.0)
+            
+            resultado = json.loads(raw)
+            cat_id = resultado.get("categoria_id")
+            
+            # Verificar que el ID existe en la lista original
+            if any(str(c["id"]) == str(cat_id) for c in categorias):
+                return str(cat_id)
+            return None
+        except Exception as e:
+            logger.error(f"[Groq] clasificar_gasto error: {e}")
+            return None
 
 
 gemini_service = GeminiService()

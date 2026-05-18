@@ -191,6 +191,7 @@ async def _guardar_transaccion(
     hora: str = None,
     cantidad: int = 1,
     producto_id: str = None,
+    categoria_id: str = None,
 ) -> str | None:
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -205,24 +206,24 @@ async def _guardar_transaccion(
                 """
                 INSERT INTO transacciones
                     (negocio_id, tipo, descripcion, monto, moneda,
-                     fecha, hora, origen_registro, cantidad, producto_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,'whatsapp',$8,$9)
+                     fecha, hora, origen_registro, cantidad, producto_id, categoria_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,'whatsapp',$8,$9,$10)
                 RETURNING id::text
                 """,
                 negocio_id, tipo, descripcion, float(monto),
-                moneda, fecha_obj, hora_obj, cantidad, producto_id,
+                moneda, fecha_obj, hora_obj, cantidad, producto_id, categoria_id,
             )
         else:
             row = await conn.fetchrow(
                 """
                 INSERT INTO transacciones
                     (negocio_id, tipo, descripcion, monto, moneda,
-                     fecha, origen_registro, cantidad, producto_id)
-                VALUES ($1,$2,$3,$4,$5,CURRENT_DATE,'whatsapp',$6,$7)
+                     fecha, origen_registro, cantidad, producto_id, categoria_id)
+                VALUES ($1,$2,$3,$4,$5,CURRENT_DATE,'whatsapp',$6,$7,$8)
                 RETURNING id::text
                 """,
                 negocio_id, tipo, descripcion, float(monto),
-                moneda, cantidad, producto_id,
+                moneda, cantidad, producto_id, categoria_id,
             )
     tx_id = row["id"] if row else None
     logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto} | id={tx_id}")
@@ -470,6 +471,12 @@ async def gasto_node(state: QuriState) -> QuriState:
     else:
         aviso_limite = ""
 
+    # Obtener categorías de gasto disponibles para este negocio
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        cats = await conn.fetch("SELECT id, nombre FROM categorias WHERE negocio_id = $1 AND tipo = 'gasto'", negocio_id)
+        categorias_gasto = [{"id": str(r["id"]), "nombre": r["nombre"]} for r in cats]
+
     registrados   = []
     total_general = 0.0
     moneda_gral   = "PEN"
@@ -479,19 +486,30 @@ async def gasto_node(state: QuriState) -> QuriState:
         monto     = float(item.get("monto", 0))
         moneda    = item.get("moneda", "PEN")
         simbolo   = SIMBOLOS.get(moneda, "S/")
-        categoria = str(item.get("categoria", "otros")).capitalize()
+        
+        # Clasificar el gasto en una de las categorías existentes usando IA
+        categoria_id = await gemini_service.clasificar_gasto(concepto, categorias_gasto)
+        
+        # Buscar el nombre de la categoría para mostrarlo en el resumen
+        categoria_nombre = "Otros"
+        if categoria_id:
+            cat_match = next((c["nombre"] for c in categorias_gasto if str(c["id"]) == categoria_id), None)
+            if cat_match:
+                categoria_nombre = cat_match.capitalize()
+
         moneda_gral = moneda
 
         await _guardar_transaccion(
             negocio_id, "gasto", concepto, monto, moneda,
             item.get("fecha"), item.get("hora"),
+            categoria_id=categoria_id
         )
         total_general += monto
         registrados.append({
             "concepto": concepto,
             "monto": monto,
             "simbolo": simbolo,
-            "categoria": categoria,
+            "categoria": categoria_nombre,
         })
 
     # Armar respuesta
