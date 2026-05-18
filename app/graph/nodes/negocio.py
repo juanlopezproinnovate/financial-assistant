@@ -46,52 +46,7 @@ def _ahora_local(negocio: dict) -> datetime.datetime:
     return datetime.datetime.now(tz)
 
 
-async def _guardar_transaccion(
-    negocio_id: str,
-    tipo: str,
-    descripcion: str,
-    monto: float,
-    moneda: str = "PEN",
-    fecha: str = None,
-    hora: str = None,
-    cantidad: int = 1,
-    producto_id: str = None,
-) -> str | None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if fecha and hora:
-            try:
-                fecha_obj = datetime.date.fromisoformat(fecha)
-                hora_obj  = datetime.time.fromisoformat(hora)
-            except ValueError:
-                fecha_obj = datetime.date.today()
-                hora_obj  = datetime.time(12, 0)
-            row = await conn.fetchrow(
-                """
-                INSERT INTO transacciones
-                    (negocio_id, tipo, descripcion, monto, moneda,
-                     fecha, hora, origen_registro, cantidad, producto_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,'whatsapp',$8,$9)
-                RETURNING id::text
-                """,
-                negocio_id, tipo, descripcion, float(monto),
-                moneda, fecha_obj, hora_obj, cantidad, producto_id,
-            )
-        else:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO transacciones
-                    (negocio_id, tipo, descripcion, monto, moneda,
-                     fecha, origen_registro, cantidad, producto_id)
-                VALUES ($1,$2,$3,$4,$5,CURRENT_DATE,'whatsapp',$6,$7)
-                RETURNING id::text
-                """,
-                negocio_id, tipo, descripcion, float(monto),
-                moneda, cantidad, producto_id,
-            )
-    tx_id = row["id"] if row else None
-    logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto} | id={tx_id}")
-    return tx_id
+# (Nota: La función _guardar_transaccion ha sido unificada más abajo en la sección NODO: VENTA)
 
 
 async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> list[dict]:
@@ -100,7 +55,7 @@ async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> li
         rows = await conn.fetch(
             """
             SELECT t.id, t.tipo, t.descripcion, t.monto, t.moneda,
-                   t.cantidad, t.producto_id::text,
+                   t.cantidad, t.producto_id::text, t.metodo_pago,
                    to_char(t.created_at AT TIME ZONE COALESCE(n.zona_horaria,'America/Lima'), 'DD/MM') AS fecha_corta
             FROM transacciones t
             JOIN negocios n ON n.id = t.negocio_id
@@ -116,6 +71,7 @@ async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> li
             "monto": float(r["monto"] or 0),
             "cantidad": int(r["cantidad"] or 1),
             "producto_id": r["producto_id"],
+            "metodo_pago": r["metodo_pago"] or "Efectivo",
         }
         for r in rows
     ]
@@ -193,7 +149,33 @@ async def _guardar_transaccion(
     cantidad: int = 1,
     producto_id: str = None,
     categoria_id: str = None,
+    metodo_pago: str = "Efectivo",
 ) -> str | None:
+    if not metodo_pago:
+        metodo_pago = "Efectivo"
+    metodo_pago = metodo_pago.strip().title()
+    if metodo_pago not in ("Yape", "Efectivo"):
+        metodo_pago = "Efectivo"
+
+    # Validar y formatear UUIDs para evitar errores de conversión en asyncpg / postgres
+    if producto_id:
+        try:
+            import uuid
+            producto_id = str(uuid.UUID(str(producto_id)))
+        except ValueError:
+            producto_id = None
+    else:
+        producto_id = None
+
+    if categoria_id:
+        try:
+            import uuid
+            categoria_id = str(uuid.UUID(str(categoria_id)))
+        except ValueError:
+            categoria_id = None
+    else:
+        categoria_id = None
+
     pool = await get_pool()
     async with pool.acquire() as conn:
         if fecha and hora:
@@ -207,12 +189,12 @@ async def _guardar_transaccion(
                 """
                 INSERT INTO transacciones
                     (negocio_id, tipo, descripcion, monto, moneda,
-                     fecha, hora, origen_registro, cantidad, producto_id, categoria_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,'whatsapp',$8,$9,$10::uuid)
+                     fecha, hora, origen_registro, cantidad, producto_id, categoria_id, metodo_pago)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,'whatsapp',$8,$9,$10::uuid,$11)
                 RETURNING id::text
                 """,
                 negocio_id, tipo, descripcion, float(monto),
-                moneda, fecha_obj, hora_obj, cantidad, producto_id, categoria_id,
+                moneda, fecha_obj, hora_obj, cantidad, producto_id, categoria_id, metodo_pago,
             )
         else:
             hoy_lima = datetime.datetime.now(pytz.timezone("America/Lima")).date()
@@ -220,12 +202,12 @@ async def _guardar_transaccion(
                 """
                 INSERT INTO transacciones
                     (negocio_id, tipo, descripcion, monto, moneda,
-                     fecha, origen_registro, cantidad, producto_id, categoria_id)
-                VALUES ($1,$2,$3,$4,$5,$6,'whatsapp',$7,$8,$9::uuid)
+                     fecha, origen_registro, cantidad, producto_id, categoria_id, metodo_pago)
+                VALUES ($1,$2,$3,$4,$5,$6,'whatsapp',$7,$8,$9::uuid,$10)
                 RETURNING id::text
                 """,
                 negocio_id, tipo, descripcion, float(monto),
-                moneda, hoy_lima, cantidad, producto_id, categoria_id,
+                moneda, hoy_lima, cantidad, producto_id, categoria_id, metodo_pago,
             )
     tx_id = row["id"] if row else None
     logger.info(f"💾 {tipo.upper()}: {descripcion} | {moneda} {monto} | id={tx_id}")
@@ -324,9 +306,15 @@ async def venta_node(state: QuriState) -> QuriState:
             prod_talla   = resultado_stock["producto_talla"]
             nombre_final = prod_nombre + (f" [Talla {prod_talla}]" if prod_talla else "")
 
+            metodo_pago_item = item.get("metodo_pago") or "Efectivo"
+            metodo_pago_item = metodo_pago_item.strip().title()
+            if metodo_pago_item not in ("Yape", "Efectivo"):
+                metodo_pago_item = "Efectivo"
+
             tx_id = await _guardar_transaccion(
                 negocio_id, "venta", nombre_final, total_venta,
                 moneda, item.get("fecha"), item.get("hora"), cantidad, producto_id,
+                metodo_pago=metodo_pago_item
             )
             descuento = await stock_service.ejecutar_descuento_venta(
                 negocio_id=negocio_id, producto_id=producto_id,
@@ -339,6 +327,7 @@ async def venta_node(state: QuriState) -> QuriState:
                 "total": total_venta,
                 "simbolo": simbolo,
                 "stock_msg": descuento["mensaje_stock"],
+                "metodo_pago": metodo_pago_item,
             })
 
         elif estado_stock in ("parcial", "sin_match"):
@@ -365,6 +354,14 @@ async def venta_node(state: QuriState) -> QuriState:
         lineas.append(f"📅 {ahora.strftime('%Y-%m-%d')} {ahora.strftime('%H:%M')}\n")
         for c in confirmados:
             lineas.append(f"📝 {c['nombre']} x{c['cantidad']} → {c['simbolo']} {c['total']:.2f}")
+        
+        # Mostrar método de pago
+        metodos = list(set(c["metodo_pago"] for c in confirmados))
+        if len(metodos) == 1:
+            lineas.append(f"💳 Método de pago: {metodos[0]}")
+        else:
+            lineas.append(f"💳 Método de pago: {', '.join(metodos)}")
+
         if len(confirmados) > 1:
             lineas.append(f"\n💰 Total: {SIMBOLOS.get(moneda_gral,'S/')} {total_general:.2f}")
         for c in confirmados:
@@ -397,6 +394,7 @@ async def venta_node(state: QuriState) -> QuriState:
         "venta_nombre_propio":      nombre_propio,
         "venta_moneda_codigo":      primer_pendiente["moneda"],
         "items_pendientes":         resto_pendientes,  # cola de pendientes
+        "venta_metodo_pago":        primer_pendiente["item"].get("metodo_pago") or "Efectivo",
     }
 
     if primer_pendiente["estado_stock"] == "parcial":
@@ -492,6 +490,11 @@ async def gasto_node(state: QuriState) -> QuriState:
         moneda    = item.get("moneda", "PEN")
         simbolo   = SIMBOLOS.get(moneda, "S/")
         
+        metodo_pago_item = item.get("metodo_pago") or "Efectivo"
+        metodo_pago_item = metodo_pago_item.strip().title()
+        if metodo_pago_item not in ("Yape", "Efectivo"):
+            metodo_pago_item = "Efectivo"
+
         # Clasificar el gasto en una de las categorías existentes usando IA
         categoria_id = await gemini_service.clasificar_gasto(concepto, categorias_gasto)
         
@@ -507,7 +510,8 @@ async def gasto_node(state: QuriState) -> QuriState:
         await _guardar_transaccion(
             negocio_id, "gasto", concepto, monto, moneda,
             item.get("fecha"), item.get("hora"),
-            categoria_id=categoria_id
+            categoria_id=categoria_id,
+            metodo_pago=metodo_pago_item,
         )
         total_general += monto
         registrados.append({
@@ -515,6 +519,7 @@ async def gasto_node(state: QuriState) -> QuriState:
             "monto": monto,
             "simbolo": simbolo,
             "categoria": categoria_nombre,
+            "metodo_pago": metodo_pago_item,
         })
 
     # Armar respuesta
@@ -525,6 +530,12 @@ async def gasto_node(state: QuriState) -> QuriState:
 
     for g in registrados:
         lineas.append(f"🏷️ {g['concepto']} [{g['categoria']}] → {g['simbolo']} {g['monto']:.2f}")
+
+    metodos = list(set(g["metodo_pago"] for g in registrados))
+    if len(metodos) == 1:
+        lineas.append(f"💳 Método de pago: {metodos[0]}")
+    else:
+        lineas.append(f"💳 Método de pago: {', '.join(metodos)}")
 
     if len(registrados) > 1:
         lineas.append(f"\n💸 Total gastado: {SIMBOLOS.get(moneda_gral,'S/')} {total_general:.2f}")
@@ -972,12 +983,18 @@ async def _handle_seleccion_stock(state, datos, negocio_id, mensaje, msg_lower):
                 prod_talla   = prod.get("talla") if prod else None
                 nombre_final = prod_nombre + (f" [Talla {prod_talla}]" if prod_talla else "")
 
+                metodo_pago_sel = datos.get("venta_metodo_pago") or "Efectivo"
+                metodo_pago_sel = metodo_pago_sel.strip().title()
+                if metodo_pago_sel not in ("Yape", "Efectivo"):
+                    metodo_pago_sel = "Efectivo"
+
                 tx_id = await _guardar_transaccion(
                     negocio_id, "venta", nombre_final,
                     datos.get("venta_monto", 0),
                     datos.get("venta_moneda_codigo", "PEN"),
                     datos.get("venta_fecha"), datos.get("venta_hora"),
                     cantidad, producto_id_sel,
+                    metodo_pago=metodo_pago_sel,
                 )
                 descuento = await stock_service.ejecutar_descuento_venta(
                     negocio_id=negocio_id, producto_id=producto_id_sel,
@@ -989,7 +1006,8 @@ async def _handle_seleccion_stock(state, datos, negocio_id, mensaje, msg_lower):
                     f"✅ Venta registrada, {nombre_propio}\n\n"
                     f"📅 {datos.get('venta_fecha','')} {datos.get('venta_hora','')}\n"
                     f"📝 Producto: {nombre_final}\n📦 Cantidad: {cantidad}\n"
-                    f"💰 Total: {simbolo} {datos.get('venta_monto', 0):.2f}\n\n"
+                    f"💰 Total: {simbolo} {datos.get('venta_monto', 0):.2f}\n"
+                    f"💳 Método de pago: {metodo_pago_sel}\n\n"
                     + descuento["mensaje_stock"]
                 )
                 return {**state, "respuesta": respuesta, "sub_estado": "", "datos_pendientes": {}}
@@ -1049,10 +1067,11 @@ async def _handle_seleccion_editar(state, datos, negocio_id, mensaje):
             tx = ultimas[seleccion - 1]
             simbolo  = SIMBOLOS.get(tx["moneda"], tx["moneda"])
             cant_txt = f" x{tx['cantidad']}" if tx.get("cantidad") and tx["cantidad"] > 1 else " x1"
+            metodo_txt = f" | {tx['metodo_pago']}" if tx.get("metodo_pago") else ""
             respuesta = (
-                f"Elegiste: {tx['descripcion']}{cant_txt} ({simbolo} {tx['monto']:.2f})\n\n"
+                f"Elegiste: {tx['descripcion']}{cant_txt}{metodo_txt} ({simbolo} {tx['monto']:.2f})\n\n"
                 f"¿Qué deseas cambiar?\n"
-                f"_(ej. 'cambia el monto a 50', 'cambia la cantidad a 3', o 'cancelar')_"
+                f"_(ej. 'cambia el monto a 50', 'cambia el método de pago a Yape', o 'cancelar')_"
             )
             return {
                 **state,
@@ -1088,6 +1107,18 @@ async def _handle_edicion_transaccion(state, datos, negocio_id, mensaje):
             "respuesta": "No entendí qué cambiar 🤔 Intenta de otra forma o escribe 'cancelar'.",
             "sub_estado": state["sub_estado"], "datos_pendientes": datos,
         }
+
+    # Normalizar metodo_pago si se editó
+    if "metodo_pago" in cambios:
+        val = cambios["metodo_pago"]
+        if isinstance(val, str):
+            val = val.strip().title()
+            if val in ("Yape", "Efectivo"):
+                cambios["metodo_pago"] = val
+            else:
+                cambios["metodo_pago"] = "Efectivo"
+        else:
+            cambios["metodo_pago"] = "Efectivo"
 
     cantidad_anterior = int(tx.get("cantidad") or 1)
     cantidad_nueva    = int(cambios.get("cantidad")) if cambios.get("cantidad") is not None else None
@@ -1182,16 +1213,24 @@ async def _handle_decision_producto_nuevo(state, datos, negocio_id, mensaje):
     # CONTINUAR y es desde venta → registrar venta sin producto_id
     simbolo       = datos.get("venta_moneda", "S/")
     nombre_propio = datos.get("venta_nombre_propio", "Comerciante")
+
+    metodo_pago_sel = datos.get("venta_metodo_pago") or "Efectivo"
+    metodo_pago_sel = metodo_pago_sel.strip().title()
+    if metodo_pago_sel not in ("Yape", "Efectivo"):
+        metodo_pago_sel = "Efectivo"
+
     tx_id = await _guardar_transaccion(
         negocio_id, "venta", nombre_prod,
         datos.get("venta_monto", 0), datos.get("venta_moneda_codigo", "PEN"),
         datos.get("venta_fecha"), datos.get("venta_hora"), cantidad,
+        metodo_pago=metodo_pago_sel,
     )
     respuesta = (
         f"✅ Venta registrada, {nombre_propio}\n\n"
         f"📅 {datos.get('venta_fecha','')} {datos.get('venta_hora','')}\n"
         f"📝 Producto: {nombre_prod}\n📦 Cantidad: {cantidad}\n"
-        f"💰 Total: {simbolo} {datos.get('venta_monto', 0):.2f}\n\n_(Sin descuento de stock)_"
+        f"💰 Total: {simbolo} {datos.get('venta_monto', 0):.2f}\n"
+        f"💳 Método de pago: {metodo_pago_sel}\n\n_(Sin descuento de stock)_"
     )
     return {**state, "respuesta": respuesta, "sub_estado": "", "datos_pendientes": {}}
 
@@ -1207,11 +1246,17 @@ async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
         nombre_propio     = datos.get("venta_nombre_propio", "Comerciante")
         
         if producto_id_nuevo:
+            metodo_pago_sel = datos.get("venta_metodo_pago") or "Efectivo"
+            metodo_pago_sel = metodo_pago_sel.strip().title()
+            if metodo_pago_sel not in ("Yape", "Efectivo"):
+                metodo_pago_sel = "Efectivo"
+
             tx_id = await _guardar_transaccion(
                 negocio_id, "venta", nombre_prod,
                 datos.get("venta_monto", 0), datos.get("venta_moneda_codigo", "PEN"),
                 datos.get("venta_fecha"), datos.get("venta_hora"),
                 cantidad_vendida, producto_id_nuevo,
+                metodo_pago=metodo_pago_sel,
             )
             descuento = await stock_service.ejecutar_descuento_venta(
                 negocio_id=negocio_id, producto_id=producto_id_nuevo,
@@ -1221,6 +1266,7 @@ async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
                 resultado["respuesta"] + 
                 f"\n\n✅ Y listo, la venta también quedó registrada, {nombre_propio}\n"
                 f"📝 {nombre_prod} x{cantidad_vendida} → {simbolo} {datos.get('venta_monto', 0):.2f}\n"
+                f"💳 Método de pago: {metodo_pago_sel}\n"
                 + descuento["mensaje_stock"]
             )
         else:

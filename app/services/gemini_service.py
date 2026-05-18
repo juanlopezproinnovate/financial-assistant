@@ -163,6 +163,7 @@ Frases: vendí, vendiste, vendimos, salió una, me llevaron, acabo de vender, ve
     "precio_unitario": float,
     "total": float,
     "moneda": "PEN|USD|BOB|CLP",
+    "metodo_pago": "Yape|Efectivo", — si el usuario menciona explícitamente "Yape" o "Efectivo". Si no menciona nada, ponlo como null.
     "fecha": "YYYY-MM-DD",       — solo si el usuario especificó fecha
     "hora": "HH:MM:SS"           — solo si el usuario especificó hora
   }
@@ -217,6 +218,7 @@ Frases: gasté, he gastado, gaste, pagué, he pagado, pague, gasto, gastos, gast
     "monto": float,
     "moneda": "PEN|USD|BOB|CLP",
     "categoria": "mercaderia|transporte|local|servicios|otros",
+    "metodo_pago": "Yape|Efectivo", — si el usuario menciona explícitamente "Yape" o "Efectivo". Si no menciona nada, ponlo como null.
     "fecha": "YYYY-MM-DD",
     "hora": "HH:MM:SS"
   }
@@ -640,8 +642,9 @@ class GeminiService:
     El usuario ha dicho: "{mensaje}"
 
     Devuelve SOLO un JSON con los campos que deben actualizarse.
-    Posibles campos: "descripcion", "monto", "moneda", "tipo", "cantidad".
+    Posibles campos: "descripcion", "monto", "moneda", "tipo", "cantidad", "metodo_pago".
     - "cantidad" → número entero de unidades vendidas
+    - "metodo_pago" → "Yape" o "Efectivo" si el usuario indica un cambio en el método de pago (ej: "fue por yape", "cambia a efectivo", "en yape").
     Si no entiendes qué cambiar, devuelve {{}}.
     No incluyas texto adicional ni markdown."""
         try:
@@ -1035,35 +1038,45 @@ Responde SOLO con JSON:
     async def clasificar_gasto(self, concepto: str, categorias: list[dict]) -> str | None:
         """
         Dada una lista de diccionarios con 'id' y 'nombre' (categorias de tipo gasto),
-        asigna el 'concepto' a la mejor categoría y retorna el 'id' de esa categoría.
+        asigna el 'concepto' a la mejor categoría utilizando un Subagente de IA.
+        Soporta errores ortográficos, typos, abreviaciones y lenguaje coloquial.
         """
         if not categorias:
             return None
-            
+
+        # Formatear la lista de categorías existentes en el negocio
         lista_str = "\n".join(f"- ID: {c['id']} | Nombre: {c['nombre']}" for c in categorias)
+        
         prompt = f"""
+Actúa como un Subagente experto en finanzas y clasificación de gastos para pequeños negocios.
+
 El comerciante reportó un gasto con el concepto: "{concepto}"
 
-Tienes las siguientes categorías de gasto disponibles en la base de datos:
+Aquí están las categorías de gasto REALES y disponibles en la base de datos de su negocio:
 {lista_str}
 
-Tu tarea es elegir LA MEJOR categoría para clasificar "{concepto}".
-Reglas de inferencia sugeridas:
-- "desayuno", "almuerzo", "cena", "comida" → "Alimentación" o similar.
-- "agua", "luz", "internet" → "Servicios" o similar.
-- "entrada de productos", "compra" → "Mercadería" o similar.
-- "alquiler" → "Alquiler" o similar.
+Tu objetivo es analizar el concepto del gasto y CLASIFICARLO en una de las categorías disponibles.
+Dado que los usuarios escriben rápido y pueden tener errores ortográficos, abreviaciones o usar lenguaje coloquial (ej. typos como "desayunoo", "deasyuno", "almuerso", "comidita", "menu", "servicios", "luz", "yape", etc.), debes usar razonamiento inteligente.
 
-NO debes inventar categorías nuevas. SOLO puedes elegir el ID de una de las opciones listadas.
+Guía de razonamiento semántico:
+- Conceptos como "desayuno", "desayunoo", "deasyuno", "almuerso", "almuerzo", "cena", "comidita", "menú", "menu", "gaseosa", "refrigerio", "alimentos", "lonche" pertenecen a categorías de "Alimentación" o "Comida".
+- Conceptos como "luz", "agua", "internet", "wifi", "teléfono", "telefono", "celular", "cable", "luz y agua", "electricidad" pertenecen a categorías de "Servicios" o "Gastos Fijos".
+- Conceptos como "transporte", "pasaje", "pasajes", "flete", "fletes", "taxi", "taxis", "gasolina", "combustible", "colectivo", "moto" pertenecen a categorías de "Transporte" o "Pasajes".
+- Conceptos como "alquiler", "renta", "local", "tienda", "puesto", "stand", "arriendo" pertenecen a categorías de "Alquiler" o "Local".
+- Conceptos como "mercaderia", "mercadería", "compra de ropa", "ropa", "prendas", "prendas de vestir", "lote", "proveedor" pertenecen a categorías de "Mercadería" o "Inventario".
 
-Responde SOLO con JSON en este formato:
-{{"categoria_id": "el-id-seleccionado"}}
+REGLAS CRÍTICAS:
+1. Debes elegir ÚNICAMENTE el ID de una de las categorías listadas.
+2. Si el concepto tiene errores ortográficos o typos, haz la corrección mental y clasifícalo en la categoría correcta.
+3. Si el concepto no tiene ninguna relación con las categorías listadas, busca si existe alguna categoría llamada "Otros", "Otros Gastos", "Varios" o similar, y devuélvela. Si no existe ninguna de estas, devuelve null.
+4. Responde ÚNICAMENTE con un objeto JSON en el siguiente formato, sin markdown, sin texto adicional:
+{{"categoria_id": "el-id-seleccionado", "categoria_nombre": "nombre-de-la-categoria-seleccionada", "razonamiento": "explicación corta"}}
 """
         try:
             raw = await _groq_chat([
-                {"role": "system", "content": "Eres un experto en finanzas clasificando gastos. Responde SOLO con JSON válido sin markdown."},
+                {"role": "system", "content": "Eres un subagente de clasificación de gastos de alta precisión. Responde SOLO con JSON válido sin markdown ni explicaciones adicionales fuera del JSON."},
                 {"role": "user", "content": prompt}
-            ], max_tokens=64, temperature=0.0)
+            ], max_tokens=150, temperature=0.0)
             
             # Limpiar posible formato markdown de la IA
             raw_clean = raw.replace("```json", "").replace("```", "").strip()
@@ -1073,14 +1086,65 @@ Responde SOLO con JSON en este formato:
             # Verificar que el ID existe en la lista original
             for c in categorias:
                 if str(c["id"]) == cat_id:
+                    logger.info(f"🧠 [Subagente IA Gasto] '{concepto}' -> categoría_id={cat_id} ({c['nombre']}) | Razonamiento: {resultado.get('razonamiento')}")
                     return cat_id
-                # Fallback por si la IA devuelve el nombre en vez del ID
-                if c["nombre"].strip().lower() == cat_id.lower():
+                # Fallback de coincidencia de nombre exacto (case-insensitive)
+                if c["nombre"].strip().lower() == str(resultado.get("categoria_nombre", "")).strip().lower():
+                    logger.info(f"🧠 [Subagente IA Gasto - Fallback Nombre] '{concepto}' -> categoría_id={c['id']} ({c['nombre']})")
                     return str(c["id"])
+            
+            # Si el ID devuelto no es válido o es null, intentar buscar "Otros"
+            for c in categorias:
+                if c["nombre"].strip().lower() in ("otros", "otro", "varios", "otros gastos"):
+                    return str(c["id"])
+                    
             return None
         except Exception as e:
-            logger.error(f"[Groq] clasificar_gasto error con raw='{raw if 'raw' in locals() else ''}': {e}")
-            return None
+            logger.error(f"[Groq Subagente] clasificar_gasto error: {e}")
+            # Robust fallback local logic for offline robustness
+            return self._clasificar_gasto_local_fallback(concepto, categorias)
+
+    def _clasificar_gasto_local_fallback(self, concepto: str, categorias: list[dict]) -> str | None:
+        concepto_lower = concepto.strip().lower()
+        def normalizar(s):
+            return s.replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+        
+        concepto_norm = normalizar(concepto_lower)
+        
+        palabras_alimentacion = ["desayuno", "almuerzo", "cena", "comida", "comer", "restaurante", "menú", "menu", "gaseosa", "agua para tomar", "refrigerio", "alimentos", "antojo", "desayunos", "almuerzos"]
+        es_alimentacion = any(w in concepto_norm for w in palabras_alimentacion)
+        
+        palabras_servicios = ["luz", "agua", "internet", "wifi", "teléfono", "telefono", "celular", "cable", "luz y agua", "electricidad", "servicios"]
+        es_servicios = any(w in concepto_norm for w in palabras_servicios)
+        
+        palabras_transporte = ["transporte", "pasaje", "pasajes", "flete", "fletes", "taxi", "taxis", "gasolina", "combustible", "colectivo", "moto", "mototaxi", "viaje"]
+        es_transporte = any(w in concepto_norm for w in palabras_transporte)
+        
+        palabras_alquiler = ["alquiler", "renta", "local", "tienda", "puesto", "stand", "arriendo"]
+        es_alquiler = any(w in concepto_norm for w in palabras_alquiler)
+
+        palabras_mercaderia = ["mercaderia", "mercadería", "compra de ropa", "ropa", "prendas", "prendas de vestir", "lote", "proveedor", "mercaderías"]
+        es_mercaderia = any(w in concepto_norm for w in palabras_mercaderia)
+
+        for c in categorias:
+            c_nombre = c["nombre"].strip().lower()
+            c_norm = normalizar(c_nombre)
+            
+            if es_alimentacion and ("alimenta" in c_norm or "comida" in c_norm or "desayuno" in c_norm):
+                return str(c["id"])
+            elif es_servicios and ("servicio" in c_norm or "luz" in c_norm or "agua" in c_norm):
+                return str(c["id"])
+            elif es_transporte and ("transporte" in c_norm or "pasaje" in c_norm or "flete" in c_norm or "envio" in c_norm):
+                return str(c["id"])
+            elif es_alquiler and ("alquiler" in c_norm or "renta" in c_norm or "local" in c_norm):
+                return str(c["id"])
+            elif es_mercaderia and ("mercader" in c_norm or "producto" in c_norm or "compra" in c_norm):
+                return str(c["id"])
+
+        for c in categorias:
+            if c["nombre"].strip().lower() in ("otros", "otro", "varios", "otros gastos"):
+                return str(c["id"])
+        return None
 
 
 gemini_service = GeminiService()
