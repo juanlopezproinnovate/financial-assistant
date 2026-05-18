@@ -82,8 +82,6 @@ class SchedulerService:
                             f"{row['mensaje']}"
                         )
 
-                        await ycloud.send_text(row["whatsapp_numero"], texto)
-
                         await conn.execute(
                             """
                             UPDATE recordatorios
@@ -92,6 +90,8 @@ class SchedulerService:
                             """,
                             row["id"],
                         )
+
+                        await ycloud.send_text(row["whatsapp_numero"], texto)
                         logger.info(
                             f"[Scheduler] Recordatorio enviado a {row['whatsapp_numero']} "
                             f"| id={row['id']}"
