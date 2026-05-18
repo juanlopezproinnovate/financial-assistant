@@ -474,7 +474,10 @@ async def gasto_node(state: QuriState) -> QuriState:
     # Obtener categorías de gasto disponibles para este negocio
     pool = await get_pool()
     async with pool.acquire() as conn:
-        cats = await conn.fetch("SELECT id, nombre FROM categorias WHERE negocio_id = $1 AND tipo = 'gasto'", negocio_id)
+        cats = await conn.fetch(
+            "SELECT id, nombre FROM categorias WHERE negocio_id = $1 AND LOWER(COALESCE(tipo, 'gasto')) IN ('gasto', 'gastos')", 
+            negocio_id
+        )
         categorias_gasto = [{"id": str(r["id"]), "nombre": r["nombre"]} for r in cats]
 
     registrados   = []

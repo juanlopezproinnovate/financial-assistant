@@ -1052,12 +1052,14 @@ Responde SOLO con JSON en este formato:
 """
         try:
             raw = await _groq_chat([
-                {"role": "system", "content": "Eres un experto en finanzas clasificando gastos. Responde SOLO con JSON."},
+                {"role": "system", "content": "Eres un experto en finanzas clasificando gastos. Responde SOLO con JSON válido sin markdown."},
                 {"role": "user", "content": prompt}
             ], max_tokens=64, temperature=0.0)
             
-            resultado = json.loads(raw)
-            cat_id = str(resultado.get("categoria_id")).strip()
+            # Limpiar posible formato markdown de la IA
+            raw_clean = raw.replace("```json", "").replace("```", "").strip()
+            resultado = json.loads(raw_clean)
+            cat_id = str(resultado.get("categoria_id", "")).strip()
             
             # Verificar que el ID existe en la lista original
             for c in categorias:
@@ -1068,7 +1070,7 @@ Responde SOLO con JSON en este formato:
                     return str(c["id"])
             return None
         except Exception as e:
-            logger.error(f"[Groq] clasificar_gasto error: {e}")
+            logger.error(f"[Groq] clasificar_gasto error con raw='{raw if 'raw' in locals() else ''}': {e}")
             return None
 
 
