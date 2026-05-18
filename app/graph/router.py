@@ -38,6 +38,7 @@ SUB_ESTADOS_BLOQUEANTES = {
     "ESPERANDO_DECISION_PRODUCTO_NUEVO",
     "ESPERANDO_PRECIO_VENTA",
     "AGREGAR_PRODUCTO_GUIADO",
+    "ESPERANDO_MONTO_GASTO",
 }
 
 
@@ -52,6 +53,27 @@ async def router_node(state: QuriState) -> QuriState:
     negocio = await onboarding_service.get_negocio(telefono)
     sesion  = await onboarding_service.get_sesion(telefono) if negocio else None
     datos_temp = onboarding_service._leer_datos_temp(sesion)
+    historial  = onboarding_service._leer_historial(sesion) if sesion else []
+
+    # ── 0. Interrupción universal por "cancelar" ───────────
+    if mensaje.strip().lower() in ("cancelar", "cancela", "cancel", "cancelo", "cancelar todo"):
+        logger.info(f"[Router] {telefono} | Cancelación explícita recibida → limpiando estado")
+        if negocio:
+            await onboarding_service.guardar_datos_temporales(telefono, {})
+        return {
+            **state,
+            "negocio": negocio or {},
+            "negocio_id": str(negocio["id"]) if negocio else None,
+            "sesion": sesion or {},
+            "historial": historial,
+            "intent": "SALUDO",
+            "datos_nlp": {},
+            "items": [],
+            "sub_estado": "",
+            "datos_pendientes": {},
+            "siguiente_nodo": "respuesta_directa",
+            "respuesta": "Operación cancelada. ¿En qué más te ayudo? 😊",
+        }
 
     # ── 2. Negocio nuevo o en onboarding ───────────────────
     if not negocio or not negocio.get("onboarding_completo"):
@@ -65,7 +87,6 @@ async def router_node(state: QuriState) -> QuriState:
         }
 
     negocio_id = str(negocio["id"])
-    historial  = onboarding_service._leer_historial(sesion)
     sub_estado = datos_temp.get("sub_estado", "")
 
     # ── 3. Hay sub_estado activo → checar si interrumpir ───
@@ -174,7 +195,7 @@ async def router_node(state: QuriState) -> QuriState:
         "datos_pendientes": datos_temp,
         "siguiente_nodo": nodo_dst,
         # La respuesta del LLM para INCOMPLETO/SALUDO/AYUDA ya viene lista
-        "respuesta": result.get("respuesta", "") if intent in ("INCOMPLETO", "SALUDO", "AYUDA", "DESCONOCIDO") else "",
+        "respuesta": result.get("respuesta", "") if intent in ("INCOMPLETO", "SALUDO", "AYUDA", "DESCONOCIDO", "ERROR") else "",
     }
 
 
@@ -203,6 +224,7 @@ def _intent_a_nodo(intent: str) -> str:
         "SALUDO":                "respuesta_directa",
         "AYUDA":                 "respuesta_directa",
         "DESCONOCIDO":           "respuesta_directa",
+        "ERROR":                 "respuesta_directa",
         "CATALOGO":              "catalogo",
         "RECORDATORIO":          "recordatorio"
     }

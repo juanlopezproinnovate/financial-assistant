@@ -486,7 +486,30 @@ async def gasto_node(state: QuriState) -> QuriState:
 
     for item in items:
         concepto  = item.get("concepto", "gasto")
-        monto     = float(item.get("monto", 0))
+        monto_val = item.get("monto")
+        
+        # Interceptar si no hay monto especificado
+        if monto_val is None or float(monto_val) <= 0:
+            metodo_pago_item = item.get("metodo_pago") or "Efectivo"
+            metodo_pago_item = metodo_pago_item.strip().title()
+            if metodo_pago_item not in ("Yape", "Efectivo"):
+                metodo_pago_item = "Efectivo"
+
+            datos_gasto = {
+                "gasto_concepto": concepto,
+                "gasto_moneda": item.get("moneda", "PEN"),
+                "gasto_fecha": item.get("fecha"),
+                "gasto_hora": item.get("hora"),
+                "gasto_metodo_pago": metodo_pago_item,
+            }
+            return {
+                **state,
+                "respuesta": f"¿Cuánto gastaste en *{concepto}*? 💸",
+                "sub_estado": "ESPERANDO_MONTO_GASTO",
+                "datos_pendientes": {**datos_gasto, "sub_estado": "ESPERANDO_MONTO_GASTO"},
+            }
+
+        monto     = float(monto_val)
         moneda    = item.get("moneda", "PEN")
         simbolo   = SIMBOLOS.get(moneda, "S/")
         
@@ -914,6 +937,9 @@ async def sub_estado_activo_node(state: QuriState) -> QuriState:
     if sub_estado == "AGREGAR_PRODUCTO_GUIADO":
         return await _handle_agregar_producto_guiado(state, datos_pendientes, negocio_id, mensaje)
 
+    if sub_estado == "ESPERANDO_MONTO_GASTO":
+        return await _handle_monto_gasto(state, datos_pendientes, negocio_id, mensaje)
+
 
     # Sub-estado desconocido
     return {**state, "respuesta": "¿En qué te ayudo? 😊", "sub_estado": "", "datos_pendientes": {}}
@@ -1285,4 +1311,99 @@ async def _handle_agregar_producto_guiado(state, datos, negocio_id, mensaje):
         "respuesta": resultado["respuesta"],
         "sub_estado": "" if resultado["finalizado"] else "AGREGAR_PRODUCTO_GUIADO",
         "datos_pendientes": {**resultado["datos"], "sub_estado": "AGREGAR_PRODUCTO_GUIADO"} if not resultado["finalizado"] else {},
+    }
+
+
+async def _handle_monto_gasto(state, datos, negocio_id, mensaje):
+    import re
+    msg_clean = mensaje.strip()
+    
+    # 1. Intentar extracción rápida con regex
+    numeros = re.findall(r"\d+(?:[.,]\d+)?", msg_clean)
+    monto = None
+    if numeros:
+        try:
+            monto = float(numeros[0].replace(",", "."))
+        except ValueError:
+            monto = None
+            
+    # 2. Si no hay número por regex, intentar con LLM
+    if monto is None:
+        try:
+            prompt = (
+                f"El usuario respondió a la pregunta de cuánto costó el gasto.\n"
+                f"Mensaje: '{msg_clean}'\n\n"
+                f"Extrae el monto numérico (float). Si no hay número, responde 'null'.\n"
+                f"Responde únicamente con el número o 'null'."
+            )
+            res = await gemini_service._groq_chat([{"role": "user", "content": prompt}], max_tokens=10, temperature=0.0)
+            res_clean = res.strip().lower()
+            if res_clean != "null":
+                monto = float(res_clean)
+        except Exception:
+            monto = None
+
+    if monto is None or monto <= 0:
+        return {
+            **state,
+            "respuesta": "¿Cuánto gastaste? Por favor, dime solo el número (ej: *20* o *S/ 20*). 💸",
+            "sub_estado": "ESPERANDO_MONTO_GASTO",
+            "datos_pendientes": datos,
+        }
+
+    # 3. Extraer moneda si se menciona en el mensaje
+    moneda = datos.get("gasto_moneda", "PEN")
+    msg_lower = msg_clean.lower()
+    if "sol" in msg_lower or "s/" in msg_lower or "pen" in msg_lower:
+        moneda = "PEN"
+    elif "dolar" in msg_lower or "usd" in msg_lower or "$" in msg_lower:
+        moneda = "USD"
+    elif "bolivian" in msg_lower or "bs" in msg_lower or "bob" in msg_lower:
+        moneda = "BOB"
+
+    concepto = datos.get("gasto_concepto", "gasto")
+    fecha = datos.get("gasto_fecha")
+    hora = datos.get("gasto_hora")
+    metodo_pago = datos.get("gasto_metodo_pago") or "Efectivo"
+
+    # 4. Obtener categorías reales del negocio para clasificar
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        cats = await conn.fetch(
+            "SELECT id, nombre FROM categorias WHERE negocio_id = $1 AND LOWER(COALESCE(tipo, 'gasto')) IN ('gasto', 'gastos')", 
+            negocio_id
+        )
+        categorias_gasto = [{"id": str(r["id"]), "nombre": r["nombre"]} for r in cats]
+
+    # Clasificar usando el Subagente de IA
+    categoria_id = await gemini_service.clasificar_gasto(concepto, categorias_gasto)
+    
+    categoria_nombre = "Otros"
+    if categoria_id:
+        cat_match = next((c["nombre"] for c in categorias_gasto if str(c["id"]) == categoria_id), None)
+        if cat_match:
+            categoria_nombre = cat_match.capitalize()
+
+    # 5. Guardar transacción en la base de datos
+    await _guardar_transaccion(
+        negocio_id, "gasto", concepto, monto, moneda,
+        fecha, hora, categoria_id=categoria_id, metodo_pago=metodo_pago
+    )
+
+    simbolo = SIMBOLOS.get(moneda, "S/")
+    negocio = state["negocio"]
+    nombre_propio = negocio.get("nombre_propietario") or negocio.get("nombre_negocio") or "Comerciante"
+
+    respuesta = (
+        f"✅ Gasto registrado, {nombre_propio}\n\n"
+        f"📅 {fecha or 'Hoy'} {hora or ''}\n"
+        f"🏷️ {concepto} [{categoria_nombre}] → {simbolo} {monto:.2f}\n"
+        f"💳 Método de pago: {metodo_pago}"
+    )
+
+    return {
+        **state,
+        "respuesta": respuesta,
+        "sub_estado": "",
+        "datos_pendientes": {},
     }
