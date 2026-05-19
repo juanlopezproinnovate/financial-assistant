@@ -77,17 +77,39 @@ async def _obtener_ultimas_transacciones(negocio_id: str, limite: int = 5) -> li
     ]
 
 
-# REEMPLAZAR la función completa
 async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:
-    filtros = {
-        "hoy":    "fecha = CURRENT_DATE",
-        "ayer":   "fecha = CURRENT_DATE - 1",
-        "semana": "fecha >= CURRENT_DATE - 7",
-        "mes":    "fecha >= CURRENT_DATE - 30",
-    }
-    where = filtros.get(periodo, filtros["hoy"])
     pool  = await get_pool()
     async with pool.acquire() as conn:
+        # Obtener la zona horaria del negocio
+        negocio_row = await conn.fetchrow(
+            "SELECT zona_horaria FROM negocios WHERE id = $1",
+            negocio_id
+        )
+        zona_str = negocio_row["zona_horaria"] if negocio_row and negocio_row["zona_horaria"] else "America/Lima"
+        try:
+            tz = ZoneInfo(zona_str)
+        except Exception:
+            tz = ZoneInfo("America/Lima")
+
+        hoy_local = datetime.datetime.now(tz).date()
+
+        if periodo == "ayer":
+            fecha_filtro = hoy_local - datetime.timedelta(days=1)
+            where_clause = "fecha = $2"
+            params = [negocio_id, fecha_filtro]
+        elif periodo == "semana":
+            fecha_filtro = hoy_local - datetime.timedelta(days=7)
+            where_clause = "fecha >= $2"
+            params = [negocio_id, fecha_filtro]
+        elif periodo == "mes":
+            fecha_filtro = hoy_local - datetime.timedelta(days=30)
+            where_clause = "fecha >= $2"
+            params = [negocio_id, fecha_filtro]
+        else: # hoy
+            fecha_filtro = hoy_local
+            where_clause = "fecha = $2"
+            params = [negocio_id, fecha_filtro]
+
         # ── Totales generales ──
         row = await conn.fetchrow(
             f"""
@@ -97,9 +119,9 @@ async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:
                 COALESCE(SUM(cantidad) FILTER (WHERE tipo='venta'), 0) AS total_unidades,
                 COUNT(*) FILTER (WHERE tipo='venta') AS num_ventas
             FROM transacciones
-            WHERE negocio_id = $1 AND {where}
+            WHERE negocio_id = $1 AND {where_clause}
             """,
-            negocio_id,
+            *params,
         )
 
         # ── Producto más vendido (por monto) ──
@@ -107,13 +129,13 @@ async def _obtener_reporte(negocio_id: str, periodo: str) -> dict:
             f"""
             SELECT descripcion, SUM(monto) AS total_monto
             FROM transacciones
-            WHERE negocio_id = $1 AND tipo = 'venta' AND {where}
+            WHERE negocio_id = $1 AND tipo = 'venta' AND {where_clause}
               AND descripcion IS NOT NULL
             GROUP BY descripcion
             ORDER BY total_monto DESC
             LIMIT 1
             """,
-            negocio_id,
+            *params,
         )
 
     tv = float(row["total_ventas"])
