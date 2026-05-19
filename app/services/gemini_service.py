@@ -604,17 +604,20 @@ class GeminiService:
             f"No agregues nada más."
         )
 
+        dashboard_link = "\n\n📈 Mira tus gráficas en tiempo real en tu dashboard:\n👉 http://bit.ly/4dIQAVB"
+
         try:
-            return await _groq_chat(
+            res = await _groq_chat(
                 [{"role": "user", "content": prompt}],
                 temperature=0.4,
                 max_tokens=200,
             )
+            return res.strip() + dashboard_link
         except Exception:
             tv  = datos.get("total_ventas", 0)
             tg  = datos.get("total_gastos", 0)
             top = datos.get("producto_top", "Sin datos aún")
-            return (
+            res = (
                 f"📊 Tu reporte está listo.\n"
                 f"Aquí tienes el resumen de tu tienda de {periodo_txt}:\n\n"
                 f"🛍️ Ventas: S/ {tv:.2f}\n"
@@ -623,6 +626,7 @@ class GeminiService:
                 f"📦 Unidades vendidas: {datos.get('total_unidades', 0)}\n"
                 f"⭐ Producto estrella: {top}"
             )
+            return res + dashboard_link
 
     # ──────────────────────────────────────────────────────
     #  EDICIÓN DE TRANSACCIONES
