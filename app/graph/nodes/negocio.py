@@ -840,6 +840,9 @@ async def reporte_node(state: QuriState) -> QuriState:
 
     datos_reporte = await _obtener_reporte(negocio_id, periodo)
 
+    if not datos_reporte.get("producto_top"):
+        datos_reporte["producto_top"] = "Sin ventas aún"
+
     if intent == "CONSULTA_ESPECIFICA":
         tipo_consulta = datos.get("tipo_consulta", "ganancia")
         respuesta = await gemini_service.generar_respuesta_consulta_especifica(
