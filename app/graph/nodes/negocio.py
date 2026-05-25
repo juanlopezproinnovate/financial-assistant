@@ -836,19 +836,24 @@ async def reporte_node(state: QuriState) -> QuriState:
     datos      = state.get("datos_nlp", {})
     negocio_id = state["negocio_id"]
     intent     = state.get("intent", "REPORTE")
-    periodo    = datos.get("periodo", "hoy")
+    periodo    = datos.get("periodo", "hoy" if intent != "RECOMENDACION" else "semana")
 
     datos_reporte = await _obtener_reporte(negocio_id, periodo)
 
     if not datos_reporte.get("producto_top"):
-        datos_reporte["producto_top"] = "Sin ventas aún"
+        datos_reporte["producto_top"] = None  # dejarlo None para que generar_recomendacion lo detecte
 
     if intent == "CONSULTA_ESPECIFICA":
         tipo_consulta = datos.get("tipo_consulta", "ganancia")
         respuesta = await gemini_service.generar_respuesta_consulta_especifica(
             tipo_consulta, datos_reporte
         )
+    elif intent == "RECOMENDACION":
+        datos_reporte["periodo"] = periodo
+        respuesta = await gemini_service.generar_recomendacion_comercial(datos_reporte)
     else:
+        if not datos_reporte.get("producto_top"):
+            datos_reporte["producto_top"] = "Sin ventas aún"
         respuesta = await gemini_service.generar_resumen_reporte(datos_reporte)
 
     return {**state, "respuesta": respuesta, "sub_estado": "", "datos_pendientes": {}}

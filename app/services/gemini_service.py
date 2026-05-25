@@ -130,7 +130,7 @@ SIEMPRE responde SOLO con JSON válido. Sin texto antes ni después. Sin markdow
 
 Estructura OBLIGATORIA:
 {
-  "intent": "VENTA|GASTO|INVENTARIO|CATALOGO|REPORTE|CONSULTA_ESPECIFICA|RECORDATORIO|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
+  "intent": "VENTA|GASTO|INVENTARIO|CATALOGO|REPORTE|CONSULTA_ESPECIFICA|RECOMENDACION|RECORDATORIO|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
   "items": [],
   "datos": {},
   "respuesta": "texto para WhatsApp",
@@ -330,6 +330,28 @@ EJEMPLOS CONSULTA_ESPECIFICA:
 "cuánto gasté ayer"     → tipo_consulta:"gastos",      periodo:"ayer"
 "cuántas prendas vendí" → tipo_consulta:"unidades",    periodo:"hoy"
 "cuánto fue mi ganancia del mes" → tipo_consulta:"ganancia", periodo:"mes"
+
+RECOMENDACION — el usuario pide consejos, sugerencias o recomendaciones comerciales.
+Frases: recomiéndame, qué me recomiendas, dame una recomendación, consejo,
+        qué debería hacer, cómo puedo mejorar, qué producto impulsar,
+        qué me conviene vender, dame un tip, sugerencia
+
+datos: {
+  "periodo": "semana|mes"   ← si NO menciona período → siempre "semana"
+}
+
+REGLA DE PERÍODO PARA RECOMENDACION:
+- Sin período explícito → "semana"
+- "mes", "este mes", "del mes" → "mes"
+- "semana", "esta semana" → "semana"
+- NO usar "hoy" ni "ayer" para este intent
+
+EJEMPLOS RECOMENDACION:
+"dame una recomendación"         → periodo:"semana"
+"qué me recomiendas esta semana" → periodo:"semana"
+"recomiéndame algo del mes"      → periodo:"mes"
+"qué producto debería impulsar"  → periodo:"semana"
+"dame un consejo de ventas"      → periodo:"semana"
 
 RECORDATORIO — frases: recuérdame, avísame, no olvides, recuérdame que, 
                ponme un recordatorio, avísame a las, alértame
@@ -718,6 +740,74 @@ class GeminiService:
     # ──────────────────────────────────────────────────────
     #  EDICIÓN DE TRANSACCIONES
     # ──────────────────────────────────────────────────────
+
+    async def generar_recomendacion_comercial(self, datos: dict) -> str:
+        """
+        Genera una recomendación comercial personalizada basada en los datos de ventas.
+        Si no hay ventas → solo motivación.
+        """
+        periodo_txt = {
+            "semana": "esta semana",
+            "mes":    "este mes",
+        }.get(datos.get("periodo", "semana"), "esta semana")
+
+        tv       = datos.get("total_ventas", 0)
+        tg       = datos.get("total_gastos", 0)
+        gn       = datos.get("ganancia_neta", 0)
+        uni      = datos.get("total_unidades", 0)
+        top      = datos.get("producto_top")
+        top_monto = datos.get("producto_top_monto", 0)
+        top_pct  = round((top_monto / tv * 100), 1) if tv > 0 and top_monto else 0
+
+        # Sin ventas → solo motivación
+        if not top or tv == 0:
+            prompt = (
+                f"Eres Quri, asistente de negocios en WhatsApp para comerciantes de ropa en Tacna, Perú.\n"
+                f"El comerciante no tiene ventas registradas {periodo_txt}.\n"
+                f"Escríbele un mensaje motivador corto (máximo 4 líneas), cálido, en español peruano natural.\n"
+                f"Anímalo a registrar sus ventas para poder darte recomendaciones personalizadas.\n"
+                f"Sin markdown. Con 1-2 emojis."
+            )
+            try:
+                return await _groq_chat(
+                    [{"role": "user", "content": prompt}],
+                    max_tokens=120, temperature=0.5,
+                )
+            except Exception:
+                return (
+                    f"¡Ánimo! 💪 Aún no tienes ventas registradas {periodo_txt}.\n"
+                    f"Empieza a registrarlas y te daré recomendaciones personalizadas para hacer crecer tu negocio. 🚀"
+                )
+
+        # Con ventas → recomendación comercial
+        prompt = (
+            f"Eres Quri, asistente de negocios en WhatsApp para comerciantes de ropa en Tacna, Perú.\n\n"
+            f"Datos de ventas del comerciante {periodo_txt}:\n"
+            f"- Ventas totales: S/ {tv:.2f}\n"
+            f"- Gastos: S/ {tg:.2f}\n"
+            f"- Ganancia neta: S/ {gn:.2f}\n"
+            f"- Unidades vendidas: {uni}\n"
+            f"- Producto estrella: {top} (S/ {top_monto:.2f} = {top_pct}% de tus ventas)\n\n"
+            f"Genera una recomendación comercial CORTA (máximo 6 líneas) que:\n"
+            f"1. Destaque el producto estrella y diga qué porcentaje representa ({top_pct}% de las ventas).\n"
+            f"2. Dé 1 consejo concreto y accionable: tener más stock de ese producto, "
+            f"ofrecerlo en combo, promocionarlo, etc.\n"
+            f"3. Cierre con una frase motivadora corta en tono peruano.\n\n"
+            f"Habla en español peruano natural, cálido y directo. Sin markdown. Con 2-3 emojis máximo."
+        )
+        try:
+            return await _groq_chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=200, temperature=0.5,
+            )
+        except Exception:
+            return (
+                f"📊 Tu producto estrella {periodo_txt} es *{top}*, "
+                f"que representa el {top_pct}% de tus ventas (S/ {top_monto:.2f}).\n\n"
+                f"💡 Te recomiendo asegurarte de tener buen stock de ese producto "
+                f"y considerar ofrecerlo en combo para aumentar el ticket promedio.\n\n"
+                f"¡Vas muy bien, sigue así! 💪"
+            )
 
     async def interpretar_edicion(self, transaccion: dict, mensaje: str) -> dict:
         prompt = f"""Eres Quri. Un usuario quiere editar una transacción existente.
