@@ -9,6 +9,7 @@ Cambios v3:
 """
 
 import json
+import random
 import re
 import logging
 import datetime
@@ -761,23 +762,26 @@ class GeminiService:
 
         # Sin ventas → solo motivación
         if not top or tv == 0:
+            variante = random.randint(1, 1000)
             prompt = (
                 f"Eres Quri, asistente de negocios en WhatsApp para comerciantes de ropa en Tacna, Perú.\n"
                 f"El comerciante no tiene ventas registradas {periodo_txt}.\n"
                 f"Escríbele un mensaje motivador corto (máximo 4 líneas), cálido, en español peruano natural.\n"
                 f"Anímalo a registrar sus ventas para poder darte recomendaciones personalizadas.\n"
-                f"Sin markdown. Con 1-2 emojis."
+                f"Sin markdown. Con 1-2 emojis. [v{variante}]"
             )
             try:
                 return await _groq_chat(
                     [{"role": "user", "content": prompt}],
-                    max_tokens=120, temperature=0.5,
+                    max_tokens=120, temperature=0.9,
                 )
             except Exception:
                 return (
                     f"¡Ánimo! 💪 Aún no tienes ventas registradas {periodo_txt}.\n"
                     f"Empieza a registrarlas y te daré recomendaciones personalizadas para hacer crecer tu negocio. 🚀"
                 )
+
+        variante_ventas = random.randint(1,1000)
 
         # Con ventas → recomendación comercial
         prompt = (
@@ -790,15 +794,15 @@ class GeminiService:
             f"- Producto estrella: {top} (S/ {top_monto:.2f} = {top_pct}% de tus ventas)\n\n"
             f"Genera una recomendación comercial CORTA (máximo 6 líneas) que:\n"
             f"1. Destaque el producto estrella y diga qué porcentaje representa ({top_pct}% de las ventas).\n"
-            f"2. Dé 1 consejo concreto y accionable: tener más stock de ese producto, "
-            f"ofrecerlo en combo, promocionarlo, etc.\n"
+            f"2. Dé 1 consejo concreto y accionable DIFERENTE cada vez: puede ser sobre stock, "
+            f"combos, promociones, horarios de venta, redes sociales, descuentos, temporada, etc.\n"
             f"3. Cierre con una frase motivadora corta en tono peruano.\n\n"
-            f"Habla en español peruano natural, cálido y directo. Sin markdown. Con 2-3 emojis máximo."
+            f"Habla en español peruano natural, cálido y directo. Sin markdown. Con 2-3 emojis máximo. [v{variante}]"
         )
         try:
             return await _groq_chat(
                 [{"role": "user", "content": prompt}],
-                max_tokens=200, temperature=0.5,
+                max_tokens=200, temperature=0.9,
             )
         except Exception:
             return (
