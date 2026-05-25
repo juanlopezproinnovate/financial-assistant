@@ -797,7 +797,7 @@ class GeminiService:
             f"2. Dé 1 consejo concreto y accionable DIFERENTE cada vez: puede ser sobre stock, "
             f"combos, promociones, horarios de venta, redes sociales, descuentos, temporada, etc.\n"
             f"3. Cierre con una frase motivadora corta en tono peruano.\n\n"
-            f"Habla en español peruano natural, cálido y directo. Sin markdown. Con 2-3 emojis máximo. [v{variante}]"
+            f"Habla en español peruano natural, cálido y directo. Sin markdown. Con 2-3 emojis máximo. [v{variante_ventas}]"
         )
         try:
             return await _groq_chat(
