@@ -130,7 +130,7 @@ SIEMPRE responde SOLO con JSON válido. Sin texto antes ni después. Sin markdow
 
 Estructura OBLIGATORIA:
 {
-  "intent": "VENTA|GASTO|INVENTARIO|CATALOGO|REPORTE|RECORDATORIO|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
+  "intent": "VENTA|GASTO|INVENTARIO|CATALOGO|REPORTE|CONSULTA_ESPECIFICA|RECORDATORIO|AYUDA|SALUDO|ELIMINAR_TRANSACCION|EDITAR_TRANSACCION|INCOMPLETO|DESCONOCIDO",
   "items": [],
   "datos": {},
   "respuesta": "texto para WhatsApp",
@@ -291,8 +291,45 @@ datos: {}
 EDITAR_TRANSACCION — frases: editar, cambiar monto, modificar un gasto
 datos: {}
 
-REPORTE — frases: cómo voy, cuánto vendí, resumen, total, mis ventas
+REPORTE — frases: cómo voy, resumen del día, resumen de ventas, mis ventas de hoy, dame un resumen
 datos: {"periodo": "hoy|ayer|semana|mes"}
+
+CONSULTA_ESPECIFICA — el usuario pregunta por UN dato puntual, no un resumen completo.
+Frases: cuánto gané, cuánto vendí, qué vendí más, cuánto gasté, cuántas prendas vendí,
+        cuántas unidades vendí, cuál fue mi producto más vendido, cuál fue mi mejor venta,
+        cuánto fue mi ganancia, cuánto ingresé, cuánto es mi utilidad,
+        qué producto vendí más, qué salió más, qué se vendió más,
+        cuánto gasté hoy, cuánto gasté esta semana
+
+datos: {
+  "tipo_consulta": "ganancia|ventas_total|producto_top|gastos|unidades",
+  "periodo": "hoy|ayer|semana|mes"
+}
+
+REGLA CRÍTICA: Si el usuario NO menciona período → asumir "hoy" siempre.
+
+DISTINCIÓN REPORTE vs CONSULTA_ESPECIFICA:
+- REPORTE → quiere un resumen COMPLETO de varios indicadores.
+  Señales: "cómo voy", "resumen", "dame todo", "mis ventas de hoy" (vago)
+- CONSULTA_ESPECIFICA → pregunta por UN solo dato.
+  Señales: verbo específico + dato ("cuánto gané", "qué vendí más", "cuánto gasté")
+
+TIPOS DE CONSULTA:
+- ganancia    → "cuánto gané", "mi ganancia", "mi utilidad", "cuánto me quedó"
+- ventas_total → "cuánto vendí", "cuánto ingresé", "mis ventas", "cuánto facturé"
+- producto_top → "qué vendí más", "qué salió más", "mi producto estrella", "qué se vendió más"
+- gastos      → "cuánto gasté", "mis gastos", "cuánto salió", "cuánto egresé"
+- unidades    → "cuántas prendas vendí", "cuántas unidades", "cuántos productos vendí"
+
+EJEMPLOS CONSULTA_ESPECIFICA:
+"cuánto gané hoy"       → tipo_consulta:"ganancia",    periodo:"hoy"
+"cuánto gané"           → tipo_consulta:"ganancia",    periodo:"hoy"
+"qué vendí más hoy"     → tipo_consulta:"producto_top", periodo:"hoy"
+"qué vendí más"         → tipo_consulta:"producto_top", periodo:"hoy"
+"cuánto vendí esta semana" → tipo_consulta:"ventas_total", periodo:"semana"
+"cuánto gasté ayer"     → tipo_consulta:"gastos",      periodo:"ayer"
+"cuántas prendas vendí" → tipo_consulta:"unidades",    periodo:"hoy"
+"cuánto fue mi ganancia del mes" → tipo_consulta:"ganancia", periodo:"mes"
 
 RECORDATORIO — frases: recuérdame, avísame, no olvides, recuérdame que, 
                ponme un recordatorio, avísame a las, alértame
@@ -627,6 +664,56 @@ class GeminiService:
                 f"⭐ Producto estrella: {top}"
             )
             return res + dashboard_link
+
+    async def generar_respuesta_consulta_especifica(self, tipo_consulta: str, datos: dict) -> str:
+        """
+        Genera una respuesta corta y puntual para CONSULTA_ESPECIFICA.
+        Recibe el tipo de consulta y los datos calculados del período.
+        """
+        periodo_txt = {
+            "hoy": "hoy",
+            "ayer": "ayer",
+            "semana": "esta semana",
+            "mes": "este mes",
+        }.get(datos.get("periodo", "hoy"), "hoy")
+
+        tv   = datos.get("total_ventas", 0)
+        tg   = datos.get("total_gastos", 0)
+        gn   = datos.get("ganancia_neta", 0)
+        uni  = datos.get("total_unidades", 0)
+        top  = datos.get("producto_top") or "Sin datos aún"
+
+        respuestas_directas = {
+            "ganancia":     f"💰 Tu ganancia neta de {periodo_txt} es S/ {gn:.2f}.",
+            "ventas_total": f"🛍️ Tus ventas de {periodo_txt} suman S/ {tv:.2f}.",
+            "producto_top": f"⭐ Lo que más vendiste {periodo_txt} fue: {top}.",
+            "gastos":       f"💸 Tus gastos de {periodo_txt} suman S/ {tg:.2f}.",
+            "unidades":     f"📦 Vendiste {uni} unidad(es) {periodo_txt}.",
+        }
+
+        # Si el dato existe, responde directo sin llamar al LLM
+        if tipo_consulta in respuestas_directas:
+            # Caso especial: si producto_top no tiene datos reales
+            if tipo_consulta == "producto_top" and top == "Sin datos aún":
+                return f"⭐ Aún no tienes ventas registradas {periodo_txt} para saber cuál fue tu producto más vendido."
+            return respuestas_directas[tipo_consulta]
+
+        # Fallback al LLM si el tipo no está mapeado
+        prompt = (
+            f"Eres Quri, asistente de negocios en WhatsApp. "
+            f"El comerciante preguntó por su '{tipo_consulta}' de {periodo_txt}. "
+            f"Datos disponibles: ventas={tv}, gastos={tg}, ganancia={gn}, "
+            f"unidades={uni}, producto_top={top}. "
+            f"Responde en UNA sola línea, directo, en español peruano, con emoji. Sin markdown."
+        )
+        try:
+            return await _groq_chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=80,
+                temperature=0.3,
+            )
+        except Exception:
+            return respuestas_directas.get(tipo_consulta, f"No pude obtener el dato de {periodo_txt}. Intenta de nuevo 🙏")
 
     # ──────────────────────────────────────────────────────
     #  EDICIÓN DE TRANSACCIONES
