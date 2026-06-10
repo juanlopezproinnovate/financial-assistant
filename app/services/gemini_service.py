@@ -33,6 +33,7 @@ def _acumular_usage(uso):
     if current is None:
         # Si nunca se llamó reset_usage, inicializar
         current = {"input": 0, "output": 0}
+        _usage_ctx.set(current)
     # Crea un dict NUEVO con los valores sumados
     _usage_ctx.set({
         "input":  current["input"]  + (getattr(uso, "prompt_tokens", 0) or 0),
@@ -57,6 +58,8 @@ async def _gemini_chat_fallback(messages: list, max_tokens: int = 256, temperatu
     Fallback rápido a Gemini cuando Groq responde con 429 (rate limit).
     Convierte el formato de mensajes de OpenAI a Gemini de forma transparente.
     """
+
+    logger.info(f"[Gemini Fallback] Tokens no trackeados para esta llamada")
     if not settings.GEMINI_API_KEY:
         raise RuntimeError("No se puede hacer fallback a Gemini porque GEMINI_API_KEY no está configurada")
 
