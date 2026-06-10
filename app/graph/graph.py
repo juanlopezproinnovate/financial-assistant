@@ -145,6 +145,7 @@ async def run_graph(telefono: str, mensaje: str, es_audio: bool = False) -> str:
     negocio_id = resultado.get("negocio_id")
 
     usage = get_usage()
+    logger.info(f"[Usage] 🏁 TOTAL para {telefono}: input={usage['input']}, output={usage['output']}")
     respuesta += f"\n\n[Input: {usage['input']} | Output: {usage['output']}]"
 
     # ── Persistir estado para el próximo turno ──

@@ -22,23 +22,35 @@ _usage_ctx: ContextVar[dict | None] = ContextVar("usage_ctx", default=None)
 
 def reset_usage():
     _usage_ctx.set({"input": 0, "output": 0})
+    logger.info("[Usage] 🔄 Usage reseteado a cero")
 
 def get_usage() -> dict:
     return _usage_ctx.get(None) or {"input": 0, "output": 0}
 
 def _acumular_usage(uso):
     if not uso:
+        logger.warning("[Usage] ❌ LLM no devolvió objeto 'usage'")
         return
+    
+    prompt_tokens = getattr(uso, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(uso, "completion_tokens", 0) or 0
+    
+    logger.info(f"[Usage] 📝 LLM devolvió: prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}")
+    
     current = _usage_ctx.get(None)
+    logger.info(f"[Usage] 📊 ContextVar ANTES: {current}")
+    
     if current is None:
-        # Si nunca se llamó reset_usage, inicializar
         current = {"input": 0, "output": 0}
         _usage_ctx.set(current)
-    # Crea un dict NUEVO con los valores sumados
-    _usage_ctx.set({
-        "input":  current["input"]  + (getattr(uso, "prompt_tokens", 0) or 0),
-        "output": current["output"] + (getattr(uso, "completion_tokens", 0) or 0),
-    })
+        logger.info("[Usage] 🆕 ContextVar inicializado a cero")
+    
+    nuevo = {
+        "input":  current["input"] + prompt_tokens,
+        "output": current["output"] + completion_tokens,
+    }
+    _usage_ctx.set(nuevo)
+    logger.info(f"[Usage] ✅ ContextVar DESPUÉS: {nuevo}")
 
 logger = logging.getLogger(__name__)
 
