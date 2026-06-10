@@ -93,10 +93,8 @@ async def _gemini_chat_fallback(messages: list, max_tokens: int = 256, temperatu
         raise
 
 
-async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> tuple[str, dict]:
-    """Retorna (texto, {"input": X, "output": Y})"""
-    usage_total = {"input": 0, "output": 0}
-    
+async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> str:
+    """Retorna solo el texto. Los tokens se acumulan internamente via _acumular_usage."""
     for modelo in (MODELO_NLP, MODELO_FALLBACK):
         try:
             resp = await client.chat.completions.create(
@@ -105,20 +103,15 @@ async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float =
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            uso = resp.usage
-            _acumular_usage(resp.usage)
-            if uso:
-                usage_total["input"]  += uso.prompt_tokens
-                usage_total["output"] += uso.completion_tokens
-            return resp.choices[0].message.content.strip(), usage_total
+            _acumular_usage(resp.usage)  # ← acumula silenciosamente
+            return resp.choices[0].message.content.strip()
         except Exception as e:
             logger.warning(f"[Groq] Error con modelo {modelo}: {e}")
             if modelo == MODELO_NLP:
                 continue
             else:
                 try:
-                    texto = await _gemini_chat_fallback(messages, max_tokens, temperature)
-                    return texto, usage_total
+                    return await _gemini_chat_fallback(messages, max_tokens, temperature)
                 except Exception as gemini_err:
                     logger.error(f"[Gemini Fallback] falló: {gemini_err}")
             raise
