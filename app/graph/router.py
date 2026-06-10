@@ -98,11 +98,12 @@ async def router_node(state: QuriState) -> QuriState:
     if sub_estado in SUB_ESTADOS_BLOQUEANTES:
         # Llamar al LLM igualmente para ver si el usuario quiere otra cosa
         contexto = _build_contexto(negocio)
-        result = await gemini_service.procesar_mensaje(
-            mensaje=mensaje,
-            historial=historial,
-            contexto_negocio=contexto,
-        )
+        usage_actual = state.get("usage", {"input": 0, "output": 0})
+        
+        result, usage_llamada = await gemini_service.procesar_mensaje(...)
+        
+        usage_actual["input"] += usage_llamada["input"]
+        usage_actual["output"] += usage_llamada["output"]
         intent_detectado = result.get("intent", "DESCONOCIDO")
 
         # Si el intent es un interruptor claro → abandonar sub_estado
@@ -145,7 +146,8 @@ async def router_node(state: QuriState) -> QuriState:
                 "items": result.get("items", []),
                 "sub_estado": "",           # limpiar sub_estado
                 "datos_pendientes": {},
-                "siguiente_nodo": _intent_a_nodo(intent_detectado)
+                "siguiente_nodo": _intent_a_nodo(intent_detectado),
+                "usage": usage_actual
             }
 
         # Si no → continuar en el sub_estado actual
@@ -164,16 +166,21 @@ async def router_node(state: QuriState) -> QuriState:
             "items": result.get("items", []),
             "sub_estado": sub_estado,
             "datos_pendientes": datos_temp,
-            "siguiente_nodo": "sub_estado_activo"            
+            "siguiente_nodo": "sub_estado_activo",
+            "usage": usage_actual            
         }
 
     # ── 4. Flujo normal: detectar intent con LLM ───────────
     contexto = _build_contexto(negocio)
-    result = await gemini_service.procesar_mensaje(
+    usage_actual = state.get("usage", {"input": 0, "output": 0})
+    result, usage_llamada = await gemini_service.procesar_mensaje(
         mensaje=mensaje,
         historial=historial,
         contexto_negocio=contexto,
     )
+
+    usage_actual["input"] += usage_llamada["input"]
+    usage_actual["output"] += usage_llamada["output"]
 
     intent   = result.get("intent", "DESCONOCIDO")
     datos    = result.get("datos", {})
@@ -196,6 +203,7 @@ async def router_node(state: QuriState) -> QuriState:
         "siguiente_nodo": nodo_dst,
         # La respuesta del LLM para INCOMPLETO/SALUDO/AYUDA ya viene lista
         "respuesta": result.get("respuesta", "") if intent in ("INCOMPLETO", "SALUDO", "AYUDA", "DESCONOCIDO", "ERROR") else "",
+        "usage": usage_actual
     }
 
 

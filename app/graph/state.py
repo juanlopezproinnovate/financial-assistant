@@ -12,6 +12,7 @@ class QuriState(TypedDict, total=False):
     # ── Identificación ──────────────────────────────────────
     telefono: str
     negocio_id: str
+    usage: dict[str, int]
 
     # ── Mensaje entrante ────────────────────────────────────
     mensaje: str

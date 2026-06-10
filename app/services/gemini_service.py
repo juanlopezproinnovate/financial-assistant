@@ -18,39 +18,18 @@ import google.generativeai as genai
 from app.config import settings
 from contextvars import ContextVar
 
-_usage_ctx: ContextVar[dict | None] = ContextVar("usage_ctx", default=None)
+def nuevo_usage() -> dict:
+    """Crea un dict de usage inicializado en cero."""
+    return {"input": 0, "output": 0}
 
-def reset_usage():
-    _usage_ctx.set({"input": 0, "output": 0})
-    logger.info("[Usage] 🔄 Usage reseteado a cero")
-
-def get_usage() -> dict:
-    return _usage_ctx.get(None) or {"input": 0, "output": 0}
-
-def _acumular_usage(uso):
+def sumar_usage(usage: dict, uso) -> dict:
+    """Suma tokens de una respuesta LLM al usage existente."""
     if not uso:
-        logger.warning("[Usage] ❌ LLM no devolvió objeto 'usage'")
-        return
-    
-    prompt_tokens = getattr(uso, "prompt_tokens", 0) or 0
-    completion_tokens = getattr(uso, "completion_tokens", 0) or 0
-    
-    logger.info(f"[Usage] 📝 LLM devolvió: prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}")
-    
-    current = _usage_ctx.get(None)
-    logger.info(f"[Usage] 📊 ContextVar ANTES: {current}")
-    
-    if current is None:
-        current = {"input": 0, "output": 0}
-        _usage_ctx.set(current)
-        logger.info("[Usage] 🆕 ContextVar inicializado a cero")
-    
-    nuevo = {
-        "input":  current["input"] + prompt_tokens,
-        "output": current["output"] + completion_tokens,
+        return usage
+    return {
+        "input": usage["input"] + (getattr(uso, "prompt_tokens", 0) or 0),
+        "output": usage["output"] + (getattr(uso, "completion_tokens", 0) or 0),
     }
-    _usage_ctx.set(nuevo)
-    logger.info(f"[Usage] ✅ ContextVar DESPUÉS: {nuevo}")
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +91,12 @@ async def _gemini_chat_fallback(messages: list, max_tokens: int = 256, temperatu
         raise
 
 
-async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> str:
-    """Retorna solo el texto. Los tokens se acumulan internamente via _acumular_usage."""
+async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> tuple[str, dict]:
+    """
+    Retorna (texto, usage_de_esta_llamada).
+    """
+    usage_llamada = {"input": 0, "output": 0}
+    
     for modelo in (MODELO_NLP, MODELO_FALLBACK):
         try:
             resp = await client.chat.completions.create(
@@ -122,15 +105,23 @@ async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float =
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            _acumular_usage(resp.usage)  # ← acumula silenciosamente
-            return resp.choices[0].message.content.strip()
+            # Acumular usage de esta llamada
+            if resp.usage:
+                usage_llamada = {
+                    "input": getattr(resp.usage, "prompt_tokens", 0) or 0,
+                    "output": getattr(resp.usage, "completion_tokens", 0) or 0,
+                }
+            return resp.choices[0].message.content.strip(), usage_llamada
+            
         except Exception as e:
             logger.warning(f"[Groq] Error con modelo {modelo}: {e}")
             if modelo == MODELO_NLP:
                 continue
             else:
                 try:
-                    return await _gemini_chat_fallback(messages, max_tokens, temperature)
+                    texto = await _gemini_chat_fallback(messages, max_tokens, temperature)
+                    # Gemini no devuelve tokens de la misma forma, dejamos 0,0
+                    return texto, {"input": 0, "output": 0}
                 except Exception as gemini_err:
                     logger.error(f"[Gemini Fallback] falló: {gemini_err}")
             raise
@@ -463,7 +454,7 @@ class GeminiService:
         mensaje: str,
         historial: list[dict] = None,
         contexto_negocio: dict = None,
-    ) -> dict:
+    ) -> tuple[dict, dict]:
         contexto_negocio = contexto_negocio or {}
         historial = historial or []
 
@@ -488,7 +479,7 @@ class GeminiService:
         messages.append({"role": "user", "content": mensaje_final})
 
         try:
-            raw = await _groq_chat(messages, max_tokens=1024, temperature=0.2)
+            raw, usage_llamada = await _groq_chat(messages, max_tokens=1024, temperature=0.2)
             resultado = self._parsear(raw)
 
             # Normalizar: asegurar que siempre existan "items" y "datos"
@@ -505,7 +496,7 @@ class GeminiService:
                     resultado["items"] = [resultado["datos"]]
                     resultado["datos"] = {}
 
-            return resultado
+            return resultado, usage_llamada
 
         except json.JSONDecodeError:
             logger.warning(f"[Groq] JSON inválido: {raw[:200]}")
@@ -516,7 +507,7 @@ class GeminiService:
                 "respuesta": "No entendí bien. ¿Puedes decirme qué vendiste o en qué te ayudo? 😊",
                 "requiere_confirmacion": False,
                 "siguiente_paso": "",
-            }
+            }, {"input": 0, "output": 0}
         except Exception as e:
             logger.error(f"[Groq] Error procesando mensaje: {e}")
             return {
@@ -526,7 +517,7 @@ class GeminiService:
                 "respuesta": "Ups, tuve un problema técnico. Intenta de nuevo 🙏",
                 "requiere_confirmacion": False,
                 "siguiente_paso": "",
-            }
+            }, {"input": 0, "output": 0}
 
     # ──────────────────────────────────────────────────────
     #  STOCK: resolver producto para descuento

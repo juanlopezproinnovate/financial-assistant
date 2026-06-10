@@ -132,6 +132,7 @@ async def run_graph(telefono: str, mensaje: str, es_audio: bool = False) -> str:
         "telefono": telefono,
         "mensaje":  mensaje,
         "es_audio": es_audio,
+        "usage": {"input": 0, "output": 0}
         # El resto lo carga el router desde la BD
     }
 
@@ -144,8 +145,7 @@ async def run_graph(telefono: str, mensaje: str, es_audio: bool = False) -> str:
     respuesta  = resultado.get("respuesta") or "¿En qué te ayudo? 😊"
     negocio_id = resultado.get("negocio_id")
 
-    usage = get_usage()
-    logger.info(f"[Usage] 🏁 TOTAL para {telefono}: input={usage['input']}, output={usage['output']}")
+    usage = resultado.get("usage", {"input": 0, "output": 0})
     respuesta += f"\n\n[Input: {usage['input']} | Output: {usage['output']}]"
 
     # ── Persistir estado para el próximo turno ──
