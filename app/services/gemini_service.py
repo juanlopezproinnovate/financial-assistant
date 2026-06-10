@@ -16,6 +16,24 @@ import datetime
 from groq import AsyncGroq
 import google.generativeai as genai
 from app.config import settings
+from contextvars import ContextVar
+
+_usage_ctx: ContextVar[dict] = ContextVar("usage_ctx", default={"input": 0, "output": 0})
+
+def reset_usage():
+    _usage_ctx.set({"input": 0, "output": 0})
+
+def get_usage() -> dict:
+    return _usage_ctx.get()
+
+def _acumular_usage(uso):
+    if not uso:
+        return
+    current = _usage_ctx.get()
+    _usage_ctx.set({
+        "input":  current["input"]  + (uso.prompt_tokens or 0),
+        "output": current["output"] + (uso.completion_tokens or 0),
+    })
 
 logger = logging.getLogger(__name__)
 
@@ -75,14 +93,10 @@ async def _gemini_chat_fallback(messages: list, max_tokens: int = 256, temperatu
         raise
 
 
-async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> str:
-    """
-    Llama a Groq con failover automático:
-    - Intenta con MODELO_NLP (70b)
-    - Si hay error 429 u otro error, reintenta con MODELO_FALLBACK (8b)
-    - Si ambos fallan, realiza un fallback rápido a Gemini
-    Retorna el texto de la respuesta.
-    """
+async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float = 0.0) -> tuple[str, dict]:
+    """Retorna (texto, {"input": X, "output": Y})"""
+    usage_total = {"input": 0, "output": 0}
+    
     for modelo in (MODELO_NLP, MODELO_FALLBACK):
         try:
             resp = await client.chat.completions.create(
@@ -91,20 +105,24 @@ async def _groq_chat(messages: list, max_tokens: int = 256, temperature: float =
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            return resp.choices[0].message.content.strip()
+            uso = resp.usage
+            _acumular_usage(resp.usage)
+            if uso:
+                usage_total["input"]  += uso.prompt_tokens
+                usage_total["output"] += uso.completion_tokens
+            return resp.choices[0].message.content.strip(), usage_total
         except Exception as e:
             logger.warning(f"[Groq] Error con modelo {modelo}: {e}")
             if modelo == MODELO_NLP:
-                logger.warning(f"[Groq] Intentando con modelo fallback: {MODELO_FALLBACK}")
                 continue
             else:
-                logger.warning(f"[Groq] Ambos modelos fallaron → iniciando fallback a Gemini")
                 try:
-                    return await _gemini_chat_fallback(messages, max_tokens, temperature)
+                    texto = await _gemini_chat_fallback(messages, max_tokens, temperature)
+                    return texto, usage_total
                 except Exception as gemini_err:
-                    logger.error(f"[Gemini Fallback] Fallback de Gemini también falló: {gemini_err}")
+                    logger.error(f"[Gemini Fallback] falló: {gemini_err}")
             raise
-    raise RuntimeError("Ambos modelos Groq fallaron y el fallback de Gemini no pudo ejecutarse")
+    raise RuntimeError("Ambos modelos fallaron")
 
 SYSTEM_PROMPT = """
 Eres Quri, el asistente de negocios por WhatsApp para comerciantes de ropa de Tacna, Perú.

@@ -29,6 +29,7 @@ from app.graph.nodes.negocio import (
 )
 from app.services.onboarding_service import onboarding_service
 from app.graph.nodes.recordatorio_node import recordatorio_node
+from app.services.gemini_service import reset_usage, get_usage
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,8 @@ async def run_graph(telefono: str, mensaje: str, es_audio: bool = False) -> str:
     4. Persiste el nuevo sub_estado y historial
     5. Retorna la respuesta
     """
+
+    reset_usage()
     estado_inicial: QuriState = {
         "telefono": telefono,
         "mensaje":  mensaje,
@@ -140,6 +143,9 @@ async def run_graph(telefono: str, mensaje: str, es_audio: bool = False) -> str:
 
     respuesta  = resultado.get("respuesta") or "¿En qué te ayudo? 😊"
     negocio_id = resultado.get("negocio_id")
+
+    usage = get_usage()
+    respuesta += f"\n\n[Input: {usage['input']} | Output: {usage['output']}]"
 
     # ── Persistir estado para el próximo turno ──
     if negocio_id:
