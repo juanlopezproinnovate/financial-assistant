@@ -18,21 +18,25 @@ import google.generativeai as genai
 from app.config import settings
 from contextvars import ContextVar
 
-_usage_ctx: ContextVar[dict] = ContextVar("usage_ctx", default={"input": 0, "output": 0})
+_usage_ctx: ContextVar[dict | None] = ContextVar("usage_ctx", default=None)
 
 def reset_usage():
     _usage_ctx.set({"input": 0, "output": 0})
 
 def get_usage() -> dict:
-    return _usage_ctx.get()
+    return _usage_ctx.get(None) or {"input": 0, "output": 0}
 
 def _acumular_usage(uso):
     if not uso:
         return
-    current = _usage_ctx.get()
+    current = _usage_ctx.get(None)
+    if current is None:
+        # Si nunca se llamó reset_usage, inicializar
+        current = {"input": 0, "output": 0}
+    # Crea un dict NUEVO con los valores sumados
     _usage_ctx.set({
-        "input":  current["input"]  + (uso.prompt_tokens or 0),
-        "output": current["output"] + (uso.completion_tokens or 0),
+        "input":  current["input"]  + (getattr(uso, "prompt_tokens", 0) or 0),
+        "output": current["output"] + (getattr(uso, "completion_tokens", 0) or 0),
     })
 
 logger = logging.getLogger(__name__)
