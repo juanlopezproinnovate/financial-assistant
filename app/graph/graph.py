@@ -29,7 +29,7 @@ from app.graph.nodes.negocio import (
 )
 from app.services.onboarding_service import onboarding_service
 from app.graph.nodes.recordatorio_node import recordatorio_node
-from app.services.gemini_service import reset_usage, get_usage
+
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ async def run_graph(telefono: str, mensaje: str, es_audio: bool = False) -> str:
     5. Retorna la respuesta
     """
 
-    reset_usage()
+
     estado_inicial: QuriState = {
         "telefono": telefono,
         "mensaje":  mensaje,
