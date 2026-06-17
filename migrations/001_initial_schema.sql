@@ -1,228 +1,240 @@
-## Table `categorias`
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
 
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `negocio_id` | `uuid` |  |
-| `nombre` | `varchar` |  |
-| `tipo` | `varchar` |  |
-| `color` | `varchar` |  Nullable |
-| `activa` | `bool` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `categorias_plantilla`
-
-Caché de categorías de inventario agrupadas por tipo de ropa. Generadas por IA la primera vez y reutilizadas para ahorrar tokens.
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `tipo_ropa` | `varchar` |  Unique |
-| `categorias` | `jsonb` |  |
-| `generado_por_ia` | `bool` |  Nullable |
-| `veces_usado` | `int4` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `updated_at` | `timestamptz` |  Nullable |
-
-## Table `inventario`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `negocio_id` | `uuid` |  |
-| `producto` | `varchar` |  |
-| `categoria` | `varchar` |  Nullable |
-| `cantidad_actual` | `int4` |  Nullable |
-| `cantidad_minima` | `int4` |  Nullable |
-| `precio_costo` | `numeric` |  Nullable |
-| `precio_costo_moneda` | `varchar` |  Nullable |
-| `precio_venta_pen` | `numeric` |  Nullable |
-| `unidad` | `varchar` |  Nullable |
-| `activo` | `bool` |  Nullable |
-| `ultima_actualizacion` | `timestamptz` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `metricas`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `negocio_id` | `uuid` |  |
-| `fecha` | `date` |  |
-| `mensajes_recibidos` | `int4` |  Nullable |
-| `mensajes_enviados` | `int4` |  Nullable |
-| `ventas_registradas` | `int4` |  Nullable |
-| `gastos_registrados` | `int4` |  Nullable |
-| `consultas_inventario` | `int4` |  Nullable |
-| `reportes_generados` | `int4` |  Nullable |
-| `audios_transcritos` | `int4` |  Nullable |
-| `ventas_a_chilenos` | `int4` |  Nullable |
-| `ventas_a_bolivianos` | `int4` |  Nullable |
-| `ventas_en_clp` | `numeric` |  Nullable |
-| `ventas_en_bob` | `numeric` |  Nullable |
-| `ventas_en_usd` | `numeric` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `negocios`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `whatsapp_numero` | `varchar` |  Unique |
-| `nombre_negocio` | `varchar` |  Nullable |
-| `nombre_propietario` | `varchar` |  Nullable |
-| `rubro` | `varchar` |  Nullable |
-| `ciudad` | `varchar` |  Nullable |
-| `estado` | `varchar` |  Nullable |
-| `onboarding_completo` | `bool` |  Nullable |
-| `idioma_preferido` | `varchar` |  Nullable |
-| `zona_horaria` | `varchar` |  Nullable |
-| `atiende_turistas_chilenos` | `bool` |  Nullable |
-| `atiende_clientes_bolivianos` | `bool` |  Nullable |
-| `proveedores_zona_franca` | `bool` |  Nullable |
-| `proveedores_bolivia` | `bool` |  Nullable |
-| `monedas_aceptadas` | `varchar` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `updated_at` | `timestamptz` |  Nullable |
-| `horario_cierre` | `varchar` |  Nullable |
-
-## Table `productos`
-
-Catálogo de productos por negocio. Separado del stock para respetar responsabilidades.
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `negocio_id` | `uuid` |  |
-| `categoria_id` | `uuid` |  Nullable |
-| `nombre` | `varchar` |  |
-| `nombre_variantes` | `_varchar` |  Nullable |
-| `precio_costo` | `numeric` |  Nullable |
-| `precio_costo_moneda` | `varchar` |  Nullable |
-| `precio_venta_pen` | `numeric` |  Nullable |
-| `unidad` | `varchar` |  Nullable |
-| `activo` | `bool` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `updated_at` | `timestamptz` |  Nullable |
-| `talla` | `text` |  Nullable |
-
-## Table `recordatorios`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `negocio_id` | `uuid` |  |
-| `tipo` | `varchar` |  |
-| `mensaje` | `text` |  |
-| `frecuencia` | `varchar` |  Nullable |
-| `hora_envio` | `time` |  Nullable |
-| `dia_semana` | `int4` |  Nullable |
-| `dia_mes` | `int4` |  Nullable |
-| `fecha_especifica` | `date` |  Nullable |
-| `activo` | `bool` |  Nullable |
-| `ultimo_envio_at` | `timestamptz` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `sesiones`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `negocio_id` | `uuid` |  Unique |
-| `estado_conversacion` | `varchar` |  Nullable |
-| `datos_temporales` | `jsonb` |  Nullable |
-| `ultimo_mensaje_at` | `timestamptz` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `stock`
-
-Estado actual de stock por producto. One-to-one con productos. Solo se actualiza, nunca se borra.
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `producto_id` | `uuid` |  Unique |
-| `cantidad_actual` | `int4` |  |
-| `cantidad_minima` | `int4` |  |
-| `ultima_actualizacion` | `timestamptz` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `stock_movimientos`
-
-Historial inmutable de movimientos de stock. Nunca se elimina. Cada fila es una entrada o salida con snapshot de cantidad.
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `producto_id` | `uuid` |  |
-| `negocio_id` | `uuid` |  |
-| `tipo` | `varchar` |  |
-| `cantidad` | `int4` |  |
-| `cantidad_antes` | `int4` |  |
-| `cantidad_despues` | `int4` |  |
-| `motivo` | `varchar` |  Nullable |
-| `transaccion_id` | `uuid` |  Nullable |
-| `notas` | `text` |  Nullable |
-| `fecha` | `date` |  |
-| `hora` | `time` |  |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `tipos_cambio`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `fecha` | `date` |  |
-| `moneda_origen` | `varchar` |  |
-| `moneda_destino` | `varchar` |  |
-| `tasa` | `numeric` |  |
-| `fuente` | `varchar` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `transacciones`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `negocio_id` | `uuid` |  |
-| `tipo` | `varchar` |  |
-| `monto` | `numeric` |  |
-| `moneda` | `varchar` |  Nullable |
-| `tasa_cambio_usada` | `numeric` |  Nullable |
-| `monto_pen` | `numeric` |  Nullable |
-| `categoria_id` | `uuid` |  Nullable |
-| `descripcion` | `text` |  Nullable |
-| `origen_cliente` | `varchar` |  Nullable |
-| `metodo_pago` | `varchar` |  Nullable |
-| `fecha` | `date` |  |
-| `hora` | `time` |  Nullable |
-| `notas` | `text` |  Nullable |
-| `origen_registro` | `varchar` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `cantidad` | `int4` |  Nullable |
-| `producto_id` | `uuid` |  Nullable |
-
+CREATE TABLE public.negocios (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  whatsapp_numero character varying UNIQUE,
+  nombre_negocio character varying,
+  nombre_propietario character varying,
+  rubro character varying,
+  ciudad character varying DEFAULT 'Tacna'::character varying,
+  estado character varying DEFAULT 'activo'::character varying,
+  onboarding_completo boolean DEFAULT false,
+  idioma_preferido character varying DEFAULT 'es'::character varying,
+  zona_horaria character varying DEFAULT 'America/Lima'::character varying,
+  atiende_turistas_chilenos boolean DEFAULT false,
+  atiende_clientes_bolivianos boolean DEFAULT false,
+  proveedores_zona_franca boolean DEFAULT false,
+  proveedores_bolivia boolean DEFAULT false,
+  monedas_aceptadas character varying DEFAULT 'PEN'::character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  horario_cierre character varying DEFAULT '20:00'::character varying,
+  numero_principal_id uuid,
+  CONSTRAINT negocios_pkey PRIMARY KEY (id),
+  CONSTRAINT negocios_numero_principal_id_fkey FOREIGN KEY (numero_principal_id) REFERENCES public.usuarios(id)
+);
+CREATE TABLE public.sesiones (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  negocio_id uuid NOT NULL UNIQUE,
+  estado_conversacion character varying DEFAULT 'inicio'::character varying,
+  datos_temporales jsonb DEFAULT '{}'::jsonb,
+  ultimo_mensaje_at timestamp with time zone DEFAULT now(),
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT sesiones_pkey PRIMARY KEY (id),
+  CONSTRAINT sesiones_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id)
+);
+CREATE TABLE public.tipos_cambio (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  fecha date NOT NULL DEFAULT CURRENT_DATE,
+  moneda_origen character varying NOT NULL,
+  moneda_destino character varying NOT NULL DEFAULT 'PEN'::character varying,
+  tasa numeric NOT NULL,
+  fuente character varying DEFAULT 'manual'::character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT tipos_cambio_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.categorias (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  negocio_id uuid NOT NULL,
+  nombre character varying NOT NULL,
+  tipo character varying NOT NULL,
+  color character varying,
+  activa boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT categorias_pkey PRIMARY KEY (id),
+  CONSTRAINT categorias_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id)
+);
+CREATE TABLE public.transacciones (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  negocio_id uuid NOT NULL,
+  tipo character varying NOT NULL,
+  monto numeric NOT NULL,
+  moneda character varying DEFAULT 'PEN'::character varying,
+  tasa_cambio_usada numeric,
+  monto_pen numeric,
+  categoria_id uuid,
+  descripcion text,
+  origen_cliente character varying DEFAULT 'local'::character varying,
+  metodo_pago character varying,
+  fecha date NOT NULL DEFAULT CURRENT_DATE,
+  hora time without time zone DEFAULT CURRENT_TIME,
+  notas text,
+  origen_registro character varying DEFAULT 'whatsapp'::character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  cantidad integer DEFAULT 1,
+  producto_id uuid,
+  CONSTRAINT transacciones_pkey PRIMARY KEY (id),
+  CONSTRAINT transacciones_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id),
+  CONSTRAINT transacciones_categoria_id_fkey FOREIGN KEY (categoria_id) REFERENCES public.categorias(id),
+  CONSTRAINT transacciones_producto_id_fkey FOREIGN KEY (producto_id) REFERENCES public.productos(id)
+);
+CREATE TABLE public.inventario (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  negocio_id uuid NOT NULL,
+  producto character varying NOT NULL,
+  categoria character varying,
+  cantidad_actual integer DEFAULT 0,
+  cantidad_minima integer DEFAULT 5,
+  precio_costo numeric,
+  precio_costo_moneda character varying DEFAULT 'PEN'::character varying,
+  precio_venta_pen numeric,
+  unidad character varying DEFAULT 'unidad'::character varying,
+  activo boolean DEFAULT true,
+  ultima_actualizacion timestamp with time zone DEFAULT now(),
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT inventario_pkey PRIMARY KEY (id),
+  CONSTRAINT inventario_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id)
+);
+CREATE TABLE public.recordatorios (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  negocio_id uuid NOT NULL,
+  tipo character varying NOT NULL,
+  mensaje text NOT NULL,
+  frecuencia character varying,
+  hora_envio time without time zone DEFAULT '08:00:00'::time without time zone,
+  dia_semana integer,
+  dia_mes integer,
+  fecha_especifica date,
+  activo boolean DEFAULT true,
+  ultimo_envio_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  enviado boolean DEFAULT false,
+  fecha_hora timestamp with time zone,
+  estado character varying DEFAULT 'pendiente'::character varying,
+  enviado_at timestamp with time zone,
+  CONSTRAINT recordatorios_pkey PRIMARY KEY (id),
+  CONSTRAINT recordatorios_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id)
+);
+CREATE TABLE public.metricas (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  negocio_id uuid NOT NULL,
+  fecha date NOT NULL DEFAULT CURRENT_DATE,
+  mensajes_recibidos integer DEFAULT 0,
+  mensajes_enviados integer DEFAULT 0,
+  ventas_registradas integer DEFAULT 0,
+  gastos_registrados integer DEFAULT 0,
+  consultas_inventario integer DEFAULT 0,
+  reportes_generados integer DEFAULT 0,
+  audios_transcritos integer DEFAULT 0,
+  ventas_a_chilenos integer DEFAULT 0,
+  ventas_a_bolivianos integer DEFAULT 0,
+  ventas_en_clp numeric DEFAULT 0,
+  ventas_en_bob numeric DEFAULT 0,
+  ventas_en_usd numeric DEFAULT 0,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT metricas_pkey PRIMARY KEY (id),
+  CONSTRAINT metricas_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id)
+);
+CREATE TABLE public.categorias_plantilla (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  tipo_ropa character varying NOT NULL UNIQUE,
+  categorias jsonb NOT NULL DEFAULT '[]'::jsonb,
+  generado_por_ia boolean DEFAULT true,
+  veces_usado integer DEFAULT 1,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT categorias_plantilla_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.productos (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  negocio_id uuid NOT NULL,
+  categoria_id uuid,
+  nombre character varying NOT NULL,
+  nombre_variantes ARRAY,
+  precio_costo numeric,
+  precio_costo_moneda character varying DEFAULT 'PEN'::character varying,
+  precio_venta_pen numeric,
+  unidad character varying DEFAULT 'unidad'::character varying,
+  activo boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  talla text,
+  CONSTRAINT productos_pkey PRIMARY KEY (id),
+  CONSTRAINT productos_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id),
+  CONSTRAINT productos_categoria_id_fkey FOREIGN KEY (categoria_id) REFERENCES public.categorias(id)
+);
+CREATE TABLE public.stock (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  producto_id uuid NOT NULL UNIQUE,
+  cantidad_actual integer NOT NULL DEFAULT 0,
+  cantidad_minima integer NOT NULL DEFAULT 5,
+  ultima_actualizacion timestamp with time zone DEFAULT now(),
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT stock_pkey PRIMARY KEY (id),
+  CONSTRAINT stock_producto_id_fkey FOREIGN KEY (producto_id) REFERENCES public.productos(id)
+);
+CREATE TABLE public.stock_movimientos (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  producto_id uuid NOT NULL,
+  negocio_id uuid NOT NULL,
+  tipo character varying NOT NULL CHECK (tipo::text = ANY (ARRAY['entrada'::character varying, 'salida'::character varying]::text[])),
+  cantidad integer NOT NULL CHECK (cantidad > 0),
+  cantidad_antes integer NOT NULL,
+  cantidad_despues integer NOT NULL,
+  motivo character varying,
+  transaccion_id uuid,
+  notas text,
+  fecha date NOT NULL DEFAULT CURRENT_DATE,
+  hora time without time zone NOT NULL DEFAULT CURRENT_TIME,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT stock_movimientos_pkey PRIMARY KEY (id),
+  CONSTRAINT stock_movimientos_producto_id_fkey FOREIGN KEY (producto_id) REFERENCES public.productos(id),
+  CONSTRAINT stock_movimientos_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id),
+  CONSTRAINT stock_movimientos_transaccion_id_fkey FOREIGN KEY (transaccion_id) REFERENCES public.transacciones(id)
+);
+CREATE TABLE public.usuarios (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  numero character varying NOT NULL UNIQUE,
+  negocio_id uuid,
+  es_principal boolean DEFAULT false,
+  verificado boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  nombre character varying,
+  CONSTRAINT usuarios_pkey PRIMARY KEY (id),
+  CONSTRAINT numeros_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id)
+);
+CREATE TABLE public.suscripciones_negocio (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  negocio_id uuid NOT NULL UNIQUE,
+  estado character varying NOT NULL DEFAULT 'activa'::character varying,
+  fecha_inicio date NOT NULL DEFAULT CURRENT_DATE,
+  fecha_renovacion date,
+  fecha_cancelacion date,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  plan_id uuid NOT NULL,
+  metodo_pago character varying,
+  CONSTRAINT suscripciones_negocio_pkey PRIMARY KEY (id),
+  CONSTRAINT suscripciones_negocio_id_fkey FOREIGN KEY (negocio_id) REFERENCES public.negocios(id),
+  CONSTRAINT suscripciones_negocio_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.planes_suscripcion(id)
+);
+CREATE TABLE public.planes_suscripcion (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  codigo character varying NOT NULL UNIQUE,
+  nombre character varying NOT NULL,
+  descripcion text,
+  precio_mensual numeric DEFAULT 0,
+  precio_anual numeric DEFAULT 0,
+  limite_numeros integer DEFAULT 1,
+  limite_productos integer DEFAULT 100,
+  limite_transacciones_mes integer DEFAULT 500,
+  limite_usuarios integer DEFAULT 1,
+  features jsonb DEFAULT '{}'::jsonb,
+  activo boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT planes_suscripcion_pkey PRIMARY KEY (id)
+);

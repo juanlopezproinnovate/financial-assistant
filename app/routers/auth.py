@@ -56,9 +56,19 @@ async def verify_otp(payload: OtpVerify):
         pool = await get_pool()
         async with pool.acquire() as conn:
             user = await conn.fetchrow(
-                "SELECT id, nombre_negocio, whatsapp_numero FROM negocios WHERE whatsapp_numero = $1",
+                """
+                SELECT n.id, n.nombre_negocio, u.numero as whatsapp_numero 
+                FROM usuarios u
+                JOIN negocios n ON n.id = u.negocio_id
+                WHERE u.numero = $1
+                """,
                 phone
             )
+            if not user:
+                user = await conn.fetchrow(
+                    "SELECT id, nombre_negocio, whatsapp_numero FROM negocios WHERE whatsapp_numero = $1",
+                    phone
+                )
             
         if not user:
              raise HTTPException(status_code=404, detail="Usuario no encontrado después de verificar")

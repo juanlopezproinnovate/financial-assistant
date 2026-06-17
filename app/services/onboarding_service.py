@@ -101,8 +101,18 @@ class OnboardingService:
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM negocios WHERE whatsapp_numero = $1", telefono
+                """
+                SELECT n.* 
+                FROM negocios n
+                JOIN usuarios u ON n.id = u.negocio_id
+                WHERE u.numero = $1
+                """, telefono
             )
+            if not row:
+                # Fallback para negocios antiguos
+                row = await conn.fetchrow(
+                    "SELECT * FROM negocios WHERE whatsapp_numero = $1", telefono
+                )
         return dict(row) if row else None
 
     async def _extraer_y_validar_horario(self, mensaje: str) -> str | None:
@@ -162,13 +172,25 @@ class OnboardingService:
                 """
                 SELECT s.*
                 FROM sesiones s
-                JOIN negocios n ON n.id = s.negocio_id
-                WHERE n.whatsapp_numero = $1
+                JOIN usuarios u ON u.negocio_id = s.negocio_id
+                WHERE u.numero = $1
                 ORDER BY s.created_at DESC
                 LIMIT 1
                 """,
                 telefono,
             )
+            if not row:
+                row = await conn.fetchrow(
+                    """
+                    SELECT s.*
+                    FROM sesiones s
+                    JOIN negocios n ON n.id = s.negocio_id
+                    WHERE n.whatsapp_numero = $1
+                    ORDER BY s.created_at DESC
+                    LIMIT 1
+                    """,
+                    telefono,
+                )
         return dict(row) if row else None
 
     async def upsert_sesion(self, negocio_id: str, estado: str, datos_temp: dict = None) -> None:
@@ -192,17 +214,29 @@ class OnboardingService:
     async def crear_negocio(self, telefono: str) -> str:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO negocios (whatsapp_numero, estado, onboarding_completo)
-                VALUES ($1, 'onboarding', false)
-                ON CONFLICT (whatsapp_numero) DO UPDATE
-                    SET updated_at = NOW()
-                RETURNING id
-                """,
-                telefono,
-            )
-        return str(row["id"])
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO negocios (whatsapp_numero, estado, onboarding_completo)
+                    VALUES ($1, 'onboarding', false)
+                    ON CONFLICT (whatsapp_numero) DO UPDATE
+                        SET updated_at = NOW()
+                    RETURNING id
+                    """,
+                    telefono,
+                )
+                negocio_id = str(row["id"])
+                
+                await conn.execute(
+                    """
+                    INSERT INTO usuarios (numero, negocio_id, es_principal)
+                    VALUES ($1, $2, true)
+                    ON CONFLICT (numero) DO NOTHING
+                    """,
+                    telefono,
+                    negocio_id
+                )
+        return negocio_id
 
     async def actualizar_negocio(self, negocio_id: str, **campos) -> None:
         if not campos:
