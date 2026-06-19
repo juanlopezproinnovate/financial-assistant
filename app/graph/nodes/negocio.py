@@ -307,9 +307,11 @@ async def venta_node(state: QuriState) -> QuriState:
                 # ← CAMBIO: no interrumpir, agregar a pendientes
                 pendientes.append({
                     **item,
+                    "item": item,
                     "estado_stock": "sin_precio",
                     "candidatos": [],
                     "nombre_producto": nombre_producto,
+                    "producto_id": resultado_stock.get("producto_id"),
                     "cantidad": cantidad,
                     "precio_unitario": None,
                     "total_venta": 0.0,
@@ -436,6 +438,7 @@ async def venta_node(state: QuriState) -> QuriState:
         sub_estado = "ESPERANDO_SELECCION_STOCK"
 
     elif primer_pendiente["estado_stock"] == "sin_precio":  # ← NUEVO
+        datos_pendientes["producto_id"] = primer_pendiente.get("producto_id")
         respuesta = (
             respuesta_parcial +
             f"¿A cuánto vendiste *{primer_pendiente['nombre_producto']}*? 💰\n"
@@ -980,6 +983,9 @@ async def sub_estado_activo_node(state: QuriState) -> QuriState:
     if sub_estado == "AGREGAR_PRODUCTO_GUIADO":
         return await _handle_agregar_producto_guiado(state, datos_pendientes, negocio_id, mensaje)
 
+    if sub_estado == "ESPERANDO_PRECIO_VENTA":
+        return await _handle_precio_venta(state, datos_pendientes, negocio_id, mensaje)
+
     if sub_estado == "ESPERANDO_MONTO_GASTO":
         return await _handle_monto_gasto(state, datos_pendientes, negocio_id, mensaje)
 
@@ -1052,6 +1058,13 @@ async def _handle_seleccion_stock(state, datos, negocio_id, mensaje, msg_lower):
                 prod_talla   = prod.get("talla") if prod else None
                 nombre_final = prod_nombre + (f" [Talla {prod_talla}]" if prod_talla else "")
 
+                # Fallback: si el usuario no especificó precio, usar el del catálogo
+                monto_final = datos.get("venta_monto", 0)
+                if (monto_final is None or monto_final == 0) and prod and prod.get("precio_venta_pen"):
+                    precio_catalogo = float(prod["precio_venta_pen"])
+                    monto_final = precio_catalogo * cantidad
+                    logger.info(f"[Venta] Precio tomado del catálogo: {precio_catalogo} x {cantidad} = {monto_final}")
+
                 metodo_pago_sel = datos.get("venta_metodo_pago") or "Efectivo"
                 metodo_pago_sel = metodo_pago_sel.strip().title()
                 if metodo_pago_sel not in ("Yape", "Efectivo"):
@@ -1059,7 +1072,7 @@ async def _handle_seleccion_stock(state, datos, negocio_id, mensaje, msg_lower):
 
                 tx_id = await _guardar_transaccion(
                     negocio_id, "venta", nombre_final,
-                    datos.get("venta_monto", 0),
+                    monto_final,
                     datos.get("venta_moneda_codigo", "PEN"),
                     datos.get("venta_fecha"), datos.get("venta_hora"),
                     cantidad, producto_id_sel,
@@ -1075,7 +1088,7 @@ async def _handle_seleccion_stock(state, datos, negocio_id, mensaje, msg_lower):
                     f"✅ Venta registrada, {nombre_propio}\n\n"
                     f"📅 {datos.get('venta_fecha','')} {datos.get('venta_hora','')}\n"
                     f"📝 Producto: {nombre_final}\n📦 Cantidad: {cantidad}\n"
-                    f"💰 Total: {simbolo} {datos.get('venta_monto', 0):.2f}\n"
+                    f"💰 Total: {simbolo} {monto_final:.2f}\n"
                     f"💳 Método de pago: {metodo_pago_sel}\n\n"
                     + descuento["mensaje_stock"]
                 )
@@ -1230,6 +1243,110 @@ async def _handle_edicion_transaccion(state, datos, negocio_id, mensaje):
         **state,
         "respuesta": f"✅ Actualizado.\nCambios: {cambios_str}{msg_stock}",
         "sub_estado": "", "datos_pendientes": {},
+    }
+
+
+async def _handle_precio_venta(state, datos, negocio_id, mensaje):
+    """Handler para ESPERANDO_PRECIO_VENTA: el producto existe pero no tiene precio en catálogo."""
+    import re
+    msg_clean = mensaje.strip()
+
+    # 1. Intentar extracción rápida con regex
+    numeros = re.findall(r"\d+(?:[.,]\d+)?", msg_clean)
+    monto = None
+    if numeros:
+        try:
+            monto = float(numeros[0].replace(",", "."))
+        except ValueError:
+            monto = None
+
+    # 2. Si no hay número por regex, intentar con LLM
+    if monto is None:
+        try:
+            prompt = (
+                f"El usuario respondió a la pregunta de cuánto vendió el producto.\n"
+                f"Mensaje: '{msg_clean}'\n\n"
+                f"Extrae el monto numérico (float). Si no hay número, responde 'null'.\n"
+                f"Responde únicamente con el número o 'null'."
+            )
+            res = await gemini_service._groq_chat([{"role": "user", "content": prompt}], max_tokens=10, temperature=0.0)
+            res_clean = res.strip().lower()
+            if res_clean != "null":
+                monto = float(res_clean)
+        except Exception:
+            monto = None
+
+    if monto is None or monto <= 0:
+        return {
+            **state,
+            "respuesta": "¿A cuánto vendiste? Por favor, dime solo el número (ej: *20* o *S/ 20*). 💰",
+            "sub_estado": "ESPERANDO_PRECIO_VENTA",
+            "datos_pendientes": datos,
+        }
+
+    # 3. Detectar moneda si se menciona
+    moneda = datos.get("venta_moneda_codigo", "PEN")
+    msg_lower = msg_clean.lower()
+    if "sol" in msg_lower or "s/" in msg_lower or "pen" in msg_lower:
+        moneda = "PEN"
+    elif "dolar" in msg_lower or "usd" in msg_lower or "$" in msg_lower:
+        moneda = "USD"
+    elif "bolivian" in msg_lower or "bs" in msg_lower or "bob" in msg_lower:
+        moneda = "BOB"
+
+    nombre_prod   = datos.get("nombre_producto_original", "producto")
+    cantidad      = datos.get("cantidad_stock", 1)
+    simbolo       = datos.get("venta_moneda", SIMBOLOS.get(moneda, "S/"))
+    nombre_propio = datos.get("venta_nombre_propio", "Comerciante")
+    fecha         = datos.get("venta_fecha")
+    hora          = datos.get("venta_hora")
+
+    # Calcular total = precio_unitario * cantidad
+    total_venta = monto * cantidad
+
+    metodo_pago = datos.get("venta_metodo_pago") or "Efectivo"
+    metodo_pago = metodo_pago.strip().title()
+    if metodo_pago not in ("Yape", "Efectivo"):
+        metodo_pago = "Efectivo"
+
+    # Buscar producto_id si está en los pendientes (viene de items_pendientes)
+    producto_id = datos.get("producto_id")
+
+    tx_id = await _guardar_transaccion(
+        negocio_id, "venta", nombre_prod, total_venta, moneda,
+        fecha, hora, cantidad, producto_id,
+        metodo_pago=metodo_pago,
+    )
+
+    # Descontar stock si hay producto vinculado
+    msg_stock = ""
+    if producto_id:
+        descuento = await stock_service.ejecutar_descuento_venta(
+            negocio_id=negocio_id, producto_id=producto_id,
+            nombre_producto=nombre_prod, cantidad=cantidad, transaccion_id=tx_id,
+        )
+        msg_stock = "\n" + descuento["mensaje_stock"]
+
+    respuesta = (
+        f"✅ Venta registrada, {nombre_propio}\n\n"
+        f"📅 {fecha or 'Hoy'} {hora or ''}\n"
+        f"📝 Producto: {nombre_prod}\n📦 Cantidad: {cantidad}\n"
+        f"💰 Total: {simbolo} {total_venta:.2f}\n"
+        f"💳 Método de pago: {metodo_pago}"
+        + msg_stock
+    )
+
+    # Verificar si hay más items pendientes
+    items_pendientes = datos.get("items_pendientes", [])
+    if items_pendientes:
+        # Continuar con el siguiente pendiente (re-invocar venta_node lógica)
+        respuesta += "\n\n_Procesando siguiente producto..._"
+
+    return {
+        **state,
+        "respuesta": respuesta,
+        "sub_estado": "",
+        "datos_pendientes": {},
     }
 
 
