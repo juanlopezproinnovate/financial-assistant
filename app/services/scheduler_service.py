@@ -17,13 +17,13 @@ class SchedulerService:
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone("America/Lima"))
 
     def start(self):
-        # Job existente: reporte de cierre cada 30 minutos
-        self.scheduler.add_job(
-            self.enviar_reporte_cierre,
-            CronTrigger(minute="0,30"),
-            id="reporte_cierre_diario",
-            replace_existing=True,
-        )
+        # Job existente: reporte de cierre cada 30 minutos (DESACTIVADO TEMPORALMENTE)
+        # self.scheduler.add_job(
+        #     self.enviar_reporte_cierre,
+        #     CronTrigger(minute="0,30"),
+        #     id="reporte_cierre_diario",
+        #     replace_existing=True,
+        # )
 
         # ── NUEVO: revisar recordatorios personalizados cada minuto ──
         self.scheduler.add_job(
